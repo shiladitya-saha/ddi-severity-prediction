@@ -1,0 +1,11 @@
+numpy
+pandas
+scikit-learn
+rdkit
+torch
+torch-geometric
+ogb
+matplotlib
+seaborn
+streamlit
+tqdm

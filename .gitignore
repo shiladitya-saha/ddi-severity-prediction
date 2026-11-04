@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+venv/
+.venv/
+
+# Data (too large for git — document download steps instead)
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*.pt
+data/processed/*.csv
+!data/processed/.gitkeep
+
+# Model checkpoints (too large for git)
+models/checkpoints/
+*.pt
+*.ckpt
+*.pth
+
+# Results that are large binary dumps (keep .json/.md summaries)
+results/*.pt
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*credentials*
+*secret*
+
+# Keep raw and processed datasets out of Git, including nested files
+data/raw/**
+data/processed/**
+!data/raw/.gitkeep
+!data/processed/.gitkeep
