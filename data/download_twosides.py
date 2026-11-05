@@ -1,216 +1,91 @@
+"""Download TWOSIDES into data/raw/twosides_raw.csv.gz.
+
+Sources (first match wins): --file (already downloaded), --hf-repo, --url.
+--pairs-only also writes twosides_pairs_raw.csv (one row per drug pair).
 """
-download_twosides.py
-Owner: M1 (Data Lead)
-
-Pulls the TWOSIDES dataset (~63K drug-drug pairs with polypharmacy side effects)
-from Hugging Face / TDC for cross-dataset validation (consumed by M5 on Day 3/4).
-
-Outputs:
-  - data/raw/twosides_raw.parquet (or .csv)
-  - data/raw/twosides_raw_meta.json
-"""
-
-import os
-import sys
-import json
-import logging
 import argparse
+import shutil
 import urllib.request
 from pathlib import Path
-from typing import Dict, Optional
-import pandas as pd
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("download_twosides")
 
 RAW_DIR = Path(__file__).resolve().parent / "raw"
-DEFAULT_OUTPUT_FILE = RAW_DIR / "twosides_raw.parquet"
-DEFAULT_META_FILE = RAW_DIR / "twosides_raw_meta.json"
-
-# Known public mirrors for TWOSIDES (HuggingFace Hub / TDC)
-HF_TWOSIDES_URL = "https://huggingface.co/datasets/mims-harvard/TDC/resolve/main/twosides.csv.gz"
-DATAVERSE_TWOSIDES_URL = "https://dataverse.harvard.edu/api/access/datafile/4264669"
+DEFAULT_URL = "https://tatonettilab-resources.s3.amazonaws.com/nsides/TWOSIDES.csv.gz"
 
 
-def download_from_huggingface(output_path: Path) -> pd.DataFrame:
-    """
-    Attempt to load TWOSIDES using huggingface `datasets` or direct download
-    from Hugging Face Hub / TDC mirror.
-    """
-    logger.info("Attempting to load TWOSIDES from Hugging Face / TDC mirror...")
-    
-    # 1. Try Hugging Face `datasets` library if installed
-    try:
-        from datasets import load_dataset
-        logger.info("Using Hugging Face `datasets` library...")
-        # Check standard huggingface repos
-        dataset = load_dataset("reach-ai/twosides", split="train")
-        df = dataset.to_pandas()
-        logger.info(f"Loaded {len(df):,} records via HF datasets library.")
-        return standardize_twosides_df(df)
-    except Exception as e:
-        logger.info(f"HF `datasets` direct load skipped ({e}). Falling back to URL download.")
-
-    # 2. Try TDC library if installed
-    try:
-        from tdc.multi_pred import DDI
-        logger.info("Using TDC DDI(name='TWOSIDES')...")
-        data = DDI(name="TWOSIDES")
-        df = data.get_data()
-        logger.info(f"Loaded {len(df):,} records via TDC.")
-        return standardize_twosides_df(df)
-    except Exception as e:
-        logger.info(f"TDC library load skipped ({e}). Trying direct HTTP download from mirror.")
-
-    # 3. Direct HTTP download of gz/csv
-    cache_file = RAW_DIR / "twosides_download.csv.gz"
-    for url in [HF_TWOSIDES_URL, DATAVERSE_TWOSIDES_URL]:
-        try:
-            logger.info(f"Fetching from: {url}")
-            urllib.request.urlretrieve(url, cache_file)
-            logger.info("Download complete. Reading into pandas DataFrame...")
-            df = pd.read_csv(cache_file, compression="infer", low_memory=False)
-            return standardize_twosides_df(df)
-        except Exception as err:
-            logger.warning(f"Download from {url} failed: {err}")
-
-    raise RuntimeError(
-        "Could not automatically download TWOSIDES. Please manually place the TWOSIDES CSV "
-        "file in 'data/raw/twosides.csv' or run with '--sample' to generate a mock subset for testing."
-    )
+def download_url(url, dest):
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Downloading {url} -> {dest}")
+    with urllib.request.urlopen(url) as r, open(dest, "wb") as f:
+        shutil.copyfileobj(r, f)
 
 
-def standardize_twosides_df(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Standardize TWOSIDES columns into a consistent schema:
-    [drug_id_1, drug_id_2, name_1, name_2, side_effect_name, side_effect_id]
-    """
-    rename_candidates = {
-        # Drug 1
-        "Drug1_ID": "drug_id_1",
-        "drug_1": "drug_id_1",
-        "drug_1_id": "drug_id_1",
-        "Drug1": "drug_id_1",
-        "stitch_id1": "drug_id_1",
-        # Drug 2
-        "Drug2_ID": "drug_id_2",
-        "drug_2": "drug_id_2",
-        "drug_2_id": "drug_id_2",
-        "Drug2": "drug_id_2",
-        "stitch_id2": "drug_id_2",
-        # Side effect
-        "Y": "side_effect_name",
-        "side_effect": "side_effect_name",
-        "condition_concept_name": "side_effect_name",
-        "event_name": "side_effect_name",
-        # Side effect concept code
-        "condition_meddra_id": "side_effect_id",
-        "side_effect_id": "side_effect_id",
-        "meddra_id": "side_effect_id",
-    }
-    
-    df = df.rename(columns={k: v for k, v in rename_candidates.items() if k in df.columns})
-
-    # Ensure required columns exist
-    if "drug_id_1" not in df.columns or "drug_id_2" not in df.columns:
-        # Fall back to positional if two ID-like columns exist
-        cols = list(df.columns)
-        if len(cols) >= 2:
-            df = df.rename(columns={cols[0]: "drug_id_1", cols[1]: "drug_id_2"})
-            if len(cols) >= 3 and "side_effect_name" not in df.columns:
-                df = df.rename(columns={cols[2]: "side_effect_name"})
-
-    if "side_effect_name" not in df.columns:
-        df["side_effect_name"] = "unspecified_adverse_event"
-
-    df["drug_id_1"] = df["drug_id_1"].astype(str).str.strip()
-    df["drug_id_2"] = df["drug_id_2"].astype(str).str.strip()
-    df["side_effect_name"] = df["side_effect_name"].astype(str).str.strip()
-
-    return df
+def download_hf(repo, dest):
+    from datasets import load_dataset
+    ds = load_dataset(repo, split="train")
+    ds.to_pandas().to_csv(dest, index=False, compression="gzip")
 
 
-def generate_sample_twosides(num_pairs: int = 500) -> pd.DataFrame:
-    """
-    Generates a synthetic sample for offline testing and pipeline dry-runs.
-    """
-    logger.info(f"Generating synthetic sample of {num_pairs} TWOSIDES records for testing...")
-    sample_drugs = [f"DB{1000 + i:05d}" for i in range(50)]
-    sample_effects = [
-        "Hypotension", "Hyperkalemia", "QT prolongation", "Gastrointestinal hemorrhage",
-        "Serotonin syndrome", "Headache", "Nausea", "Dizziness", "Bradycardia", "Renal failure"
-    ]
-    
-    rows = []
-    import random
-    random.seed(42)
-    for _ in range(num_pairs):
-        d1, d2 = random.sample(sample_drugs, 2)
-        effect = random.choice(sample_effects)
-        rows.append({
-            "drug_id_1": d1,
-            "drug_id_2": d2,
-            "side_effect_name": effect,
-            "side_effect_id": f"MEDDRA_{abs(hash(effect)) % 100000}",
-        })
-    return pd.DataFrame(rows)
+def _find(cols, *must, any_of=()):
+    """First column whose lowercase name contains all `must` substrings (and one of any_of)."""
+    for c in cols:
+        lc = c.lower().replace(" ", "_")
+        if all(m in lc for m in must) and (not any_of or any(a in lc for a in any_of)):
+            return c
+    return None
+
+
+def build_pairs(src, dst, chunksize=500_000):
+    import sys
+    import pandas as pd
+    head = pd.read_csv(src, nrows=0)
+    cols = [c.strip() for c in head.columns]
+    d1 = _find(cols, "drug", "1", any_of=("rxnorm", "rxnorn", "id"))
+    d2 = _find(cols, "drug", "2", any_of=("rxnorm", "rxnorn", "id"))
+    cond = (_find(cols, "condition", "meddra") or _find(cols, "condition", "id")
+            or _find(cols, "condition", "name") or _find(cols, "condition"))
+    prr = next((c for c in cols if c.lower() == "prr"), None)
+    print(f"columns: {cols}\ndetected -> drug1={d1} drug2={d2} condition={cond} prr={prr}")
+    if not (d1 and d2 and cond):
+        sys.exit("Could not detect drug/condition columns; edit build_pairs with the names above.")
+
+    keys = [d1, d2]
+    parts = []
+    for ch in pd.read_csv(src, chunksize=chunksize, low_memory=False):
+        ch.columns = [c.strip() for c in ch.columns]
+        agg = {"n_side_effects": (cond, "nunique")}
+        if prr:
+            agg["max_prr"] = (prr, "max")
+        parts.append(ch.groupby(keys).agg(**agg).reset_index())
+    cat = pd.concat(parts)
+    final = {"n_side_effects": ("n_side_effects", "sum")}
+    if prr:
+        final["max_prr"] = ("max_prr", "max")
+    pairs = cat.groupby(keys).agg(**final).reset_index()
+    pairs = pairs.rename(columns={d1: "drug_1_id", d2: "drug_2_id"})
+    pairs.to_csv(dst, index=False)
+    print(f"{len(pairs)} drug pairs -> {dst}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Download TWOSIDES polypharmacy dataset.")
-    parser.add_argument("--local-path", type=str, default=None, help="Path to local TWOSIDES file if pre-downloaded")
-    parser.add_argument("--output", type=str, default=str(DEFAULT_OUTPUT_FILE), help="Output path (.parquet or .csv)")
-    parser.add_argument("--sample", action="store_true", help="Generate a mock sample for offline dry-run")
-    args = parser.parse_args()
-
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = Path(args.output)
-
-    if args.sample:
-        df = generate_sample_twosides(num_pairs=1000)
-        source = "Synthetic dry-run sample (offline)"
-    elif args.local_path and Path(args.local_path).exists():
-        logger.info(f"Loading from specified local path: {args.local_path}")
-        df = pd.read_csv(args.local_path, compression="infer", low_memory=False)
-        df = standardize_twosides_df(df)
-        source = f"Local file ({Path(args.local_path).name})"
-    elif (RAW_DIR / "twosides.csv").exists():
-        logger.info(f"Loading from existing raw file: {RAW_DIR / 'twosides.csv'}")
-        df = pd.read_csv(RAW_DIR / "twosides.csv", low_memory=False)
-        df = standardize_twosides_df(df)
-        source = "Local data/raw/twosides.csv"
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+    ap.add_argument("--file", help="already-downloaded TWOSIDES.csv.gz (skips download)")
+    ap.add_argument("--url", default=DEFAULT_URL)
+    ap.add_argument("--hf-repo", help="HuggingFace dataset id instead of --url")
+    ap.add_argument("--out", default=str(RAW_DIR))
+    ap.add_argument("--pairs-only", action="store_true")
+    a = ap.parse_args()
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    dest = out / "twosides_raw.csv.gz"
+    if a.file:
+        shutil.copyfile(a.file, dest)
+    elif a.hf_repo:
+        download_hf(a.hf_repo, dest)
     else:
-        df = download_from_huggingface(output_path)
-        source = "HuggingFace / TDC Mirror"
-
-    # Compute unique pairs (undirected count)
-    pairs = set()
-    for _, row in df.iterrows():
-        pair = tuple(sorted([str(row["drug_id_1"]), str(row["drug_id_2"])]))
-        pairs.add(pair)
-
-    unique_drugs = set(df["drug_id_1"]).union(set(df["drug_id_2"]))
-
-    # Save output
-    if output_path.suffix == ".parquet":
-        df.to_parquet(output_path, index=False)
-    else:
-        df.to_csv(output_path, index=False)
-
-    # Save metadata summary
-    metadata = {
-        "source": source,
-        "num_records": len(df),
-        "num_unique_drug_pairs": len(pairs),
-        "num_unique_drugs": len(unique_drugs),
-        "num_unique_side_effects": df["side_effect_name"].nunique() if "side_effect_name" in df.columns else 0,
-        "output_file": str(output_path.name),
-    }
-    with open(DEFAULT_META_FILE, "w") as f:
-        json.dump(metadata, f, indent=2)
-
-    logger.info(f"Done! Saved {len(df):,} TWOSIDES records ({len(pairs):,} unique pairs) to {output_path}")
-    logger.info(f"Metadata saved to {DEFAULT_META_FILE}")
+        download_url(a.url, dest)
+    print(f"Saved {dest}")
+    if a.pairs_only:
+        build_pairs(dest, out / "twosides_pairs_raw.csv")
 
 
 if __name__ == "__main__":

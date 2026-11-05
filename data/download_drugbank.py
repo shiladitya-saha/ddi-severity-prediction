@@ -1,182 +1,132 @@
-"""
-data/download_drugbank.py
-Owner: M1 (Data Lead)
+"""Ingest DrugBank-derived DDI data into data/raw/ (NEVER commit the output).
 
-Acquires and extracts DrugBank 5.0 raw data:
-- Parses local DrugBank XML release (`full database.xml`) into tabular DDI pairs
-- Extracts drug metadata (DrugBank ID, SMILES, common name, type)
-- Falls back to public open-access DDI mirrors (TDC/BioSNAP) if XML is absent
-- Outputs:
-    - data/raw/drugbank_raw.parquet (or .csv)
-    - data/raw/drugbank_raw_meta.json
-"""
+  1. Official XML (licensed):  python data/download_drugbank.py --xml /path/full_database.xml
+  2. Open pair table (CSV):    python data/download_drugbank.py --csv /path/DDI_data.csv
 
-import os
-import sys
-import json
-import logging
+Outputs (data/raw/):
+  drugbank_drugs_raw.csv   drug_id, name, smiles, groups
+  drugbank_raw.csv         drug_id_1, drug_id_2, description
+"""
 import argparse
-import xml.etree.ElementTree as ET
+import csv
+import sys
 from pathlib import Path
-from typing import Dict, List, Optional
-import pandas as pd
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("download_drugbank")
+import xml.etree.ElementTree as ET
 
 RAW_DIR = Path(__file__).resolve().parent / "raw"
-DEFAULT_OUTPUT_FILE = RAW_DIR / "drugbank_raw.parquet"
-DEFAULT_META_FILE = RAW_DIR / "drugbank_raw_meta.json"
-XML_NAMESPACE = "{http://www.drugbank.ca}"
+NS = "{http://www.drugbank.ca}"
 
 
-def parse_drugbank_xml(xml_path: Path) -> pd.DataFrame:
-    """
-    Incrementally stream and parse the large DrugBank 5.0 XML database.
-    Extracts:
-        - drugbank_id, name, smiles
-        - drug-drug interactions (drug1_id, drug2_id, description)
-    """
-    logger.info(f"Streaming and parsing DrugBank XML from: {xml_path}")
-    interactions: List[Dict[str, str]] = []
-    drugs: Dict[str, Dict[str, Optional[str]]] = {}
-
-    context = ET.iterparse(str(xml_path), events=("end",))
-    
-    for event, elem in context:
-        if elem.tag == f"{XML_NAMESPACE}drug":
-            # Primary DrugBank ID
-            db_id_elem = elem.find(f"{XML_NAMESPACE}drugbank-id[@primary='true']")
-            if db_id_elem is None:
-                db_id_elem = elem.find(f"{XML_NAMESPACE}drugbank-id")
-            
-            if db_id_elem is not None and db_id_elem.text:
-                drug_id = db_id_elem.text.strip()
-                name_elem = elem.find(f"{XML_NAMESPACE}name")
-                name = name_elem.text.strip() if name_elem is not None and name_elem.text else ""
-                drug_type = elem.attrib.get("type", "small molecule")
-
-                # Extract Canonical SMILES
-                smiles = None
-                calc_props = elem.find(f"{XML_NAMESPACE}calculated-properties")
-                if calc_props is not None:
-                    for prop in calc_props.findall(f"{XML_NAMESPACE}property"):
-                        kind = prop.find(f"{XML_NAMESPACE}kind")
-                        if kind is not None and kind.text in ["SMILES", "Canonical SMILES"]:
-                            val = prop.find(f"{XML_NAMESPACE}value")
-                            if val is not None and val.text:
-                                smiles = val.text.strip()
-                                break
-
-                drugs[drug_id] = {
-                    "drug_id": drug_id,
-                    "name": name,
-                    "type": drug_type,
-                    "smiles": smiles,
-                }
-
-                # Extract Drug-Drug Interactions
-                ddi_list = elem.find(f"{XML_NAMESPACE}drug-interactions")
-                if ddi_list is not None:
-                    for ddi in ddi_list.findall(f"{XML_NAMESPACE}drug-interaction"):
-                        partner_id_elem = ddi.find(f"{XML_NAMESPACE}drugbank-id")
-                        desc_elem = ddi.find(f"{XML_NAMESPACE}description")
-                        if partner_id_elem is not None and partner_id_elem.text:
-                            partner_id = partner_id_elem.text.strip()
-                            desc = desc_elem.text.strip() if desc_elem is not None and desc_elem.text else ""
-                            interactions.append({
-                                "drug_id_1": drug_id,
-                                "drug_id_2": partner_id,
-                                "interaction_text": desc,
-                            })
-
-            # Clear element from memory to prevent memory bloat
-            elem.clear()
-
-    logger.info(f"Parsed {len(drugs):,} drugs and {len(interactions):,} raw directional interaction pairs.")
-
-    # Convert to DataFrame and enrich with drug names / SMILES
-    df = pd.DataFrame(interactions)
-    df["smiles_1"] = df["drug_id_1"].map(lambda x: drugs.get(x, {}).get("smiles"))
-    df["smiles_2"] = df["drug_id_2"].map(lambda x: drugs.get(x, {}).get("smiles"))
-    df["name_1"] = df["drug_id_1"].map(lambda x: drugs.get(x, {}).get("name"))
-    df["name_2"] = df["drug_id_2"].map(lambda x: drugs.get(x, {}).get("name"))
-
-    return df
+def _text(elem, path):
+    node = elem.find(path)
+    return (node.text or "").strip() if node is not None and node.text else ""
 
 
-def download_open_ddi_fallback() -> pd.DataFrame:
-    """
-    Fallback loader for open-source DDI benchmarks (e.g., TDC DrugBank benchmark)
-    when the licensed DrugBank XML cannot be found locally.
-    """
-    logger.info("Attempting to load DrugBank DDI dataset via Therapeutics Data Commons (TDC)...")
-    try:
-        from tdc.single_pred import DDI
-        data = DDI(name="DrugBank")
-        split = data.get_split()
-        df = pd.concat([split["train"], split["valid"], split["test"]], ignore_index=True)
-        # Standardize columns
-        df = df.rename(columns={
-            "Drug1_ID": "drug_id_1",
-            "Drug2_ID": "drug_id_2",
-            "Drug1": "smiles_1",
-            "Drug2": "smiles_2",
-            "Y": "interaction_text",
-        })
-        logger.info(f"Successfully retrieved {len(df):,} pairs from open mirror.")
-        return df
-    except Exception as e:
-        logger.error(f"Failed to fetch open mirror: {e}")
-        raise RuntimeError(
-            "DrugBank XML not found and TDC fallback unavailable. "
-            "Please download 'full database.xml' from https://go.drugbank.com/releases/latest "
-            "and place it inside 'data/raw/'."
-        )
+def parse_xml(xml_path, out_dir=RAW_DIR):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    n_drugs = n_edges = 0
+    with open(out_dir / "drugbank_drugs_raw.csv", "w", newline="", encoding="utf-8") as fd, \
+         open(out_dir / "drugbank_raw.csv", "w", newline="", encoding="utf-8") as fe:
+        wd, we = csv.writer(fd), csv.writer(fe)
+        wd.writerow(["drug_id", "name", "smiles", "groups"])
+        we.writerow(["drug_id_1", "drug_id_2", "description"])
+        depth = 0
+        for event, elem in ET.iterparse(str(xml_path), events=("start", "end")):
+            if event == "start":
+                depth += 1
+                continue
+            if elem.tag == NS + "drug" and depth == 2:
+                did = ""
+                for node in elem.findall(NS + "drugbank-id"):
+                    if node.get("primary") == "true":
+                        did = (node.text or "").strip()
+                        break
+                if did:
+                    smiles = ""
+                    for prop in elem.findall(f"{NS}calculated-properties/{NS}property"):
+                        if _text(prop, NS + "kind") == "SMILES":
+                            smiles = _text(prop, NS + "value")
+                            break
+                    groups = "|".join((g.text or "").strip()
+                                      for g in elem.findall(f"{NS}groups/{NS}group"))
+                    wd.writerow([did, _text(elem, NS + "name"), smiles, groups])
+                    n_drugs += 1
+                    for ix in elem.findall(f"{NS}drug-interactions/{NS}drug-interaction"):
+                        other = _text(ix, NS + "drugbank-id")
+                        if other:
+                            we.writerow([did, other, _text(ix, NS + "description")])
+                            n_edges += 1
+                elem.clear()
+            depth -= 1
+    print(f"Parsed {n_drugs} drugs, {n_edges} directed interactions -> {out_dir}")
+
+
+def _pick(df_cols, given, candidates):
+    if given:
+        if given not in df_cols:
+            sys.exit(f"Column '{given}' not in CSV. Available: {list(df_cols)}")
+        return given
+    low = {c.lower().replace(" ", "").replace("_", ""): c for c in df_cols}
+    for cand in candidates:
+        if cand in low:
+            return low[cand]
+    return None
+
+
+def from_csv(src, out_dir=RAW_DIR, id1=None, id2=None, label=None,
+             name1=None, name2=None, smiles1=None, smiles2=None):
+    """Ingest any open DDI pair table (local path or http(s) URL) -> data/raw/."""
+    import pandas as pd
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df = pd.read_csv(src, sep=None, engine="python", dtype=str).fillna("")
+    cols = df.columns
+    c_id1 = _pick(cols, id1, ["drug1id", "drugid1", "id1", "drugaid"])
+    c_id2 = _pick(cols, id2, ["drug2id", "drugid2", "id2", "drugbid"])
+    c_lab = _pick(cols, label, ["y", "label", "interactiontype", "type", "event", "description", "interaction"])
+    if not (c_id1 and c_id2 and c_lab):
+        sys.exit(f"Could not detect id/label columns in {list(cols)}; pass --id1 --id2 --label.")
+    c_n1 = _pick(cols, name1, ["drug1name", "drugname1", "name1"])
+    c_n2 = _pick(cols, name2, ["drug2name", "drugname2", "name2"])
+    c_s1 = _pick(cols, smiles1, ["drug1", "drug1smiles", "smiles1"])
+    c_s2 = _pick(cols, smiles2, ["drug2", "drug2smiles", "smiles2"])
+    if c_s1 in (c_id1, c_n1, c_lab): c_s1 = None
+    if c_s2 in (c_id2, c_n2, c_lab): c_s2 = None
+
+    edges = pd.DataFrame({"drug_id_1": df[c_id1], "drug_id_2": df[c_id2],
+                          "description": df[c_lab]})
+    edges.to_csv(out_dir / "drugbank_raw.csv", index=False)
+
+    def side(i, n, s):
+        d = pd.DataFrame({"drug_id": df[i]})
+        d["name"] = df[n] if n else ""
+        d["smiles"] = df[s] if s else ""
+        d["groups"] = ""
+        return d
+    drugs = pd.concat([side(c_id1, c_n1, c_s1), side(c_id2, c_n2, c_s2)])
+    drugs["_k"] = (drugs["name"] != "").astype(int) + (drugs["smiles"] != "").astype(int)
+    drugs = (drugs.sort_values("_k", ascending=False).drop_duplicates("drug_id")
+             .drop(columns="_k"))
+    drugs[["drug_id", "name", "smiles", "groups"]].to_csv(
+        out_dir / "drugbank_drugs_raw.csv", index=False)
+    print(f"CSV source: {len(drugs)} drugs, {len(edges)} interactions -> {out_dir}"
+          f" (label col='{c_lab}', smiles={'yes' if c_s1 else 'NO'})")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Download and parse DrugBank 5.0 raw data.")
-    parser.add_argument("--xml-path", type=str, default=None, help="Path to full database.xml")
-    parser.add_argument("--output", type=str, default=str(DEFAULT_OUTPUT_FILE), help="Output path")
-    parser.add_argument("--force-fallback", action="store_true", help="Force using open-access mirror")
-    args = parser.parse_args()
-
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = Path(args.output)
-
-    # Locate XML
-    xml_candidate = Path(args.xml_path) if args.xml_path else RAW_DIR / "full database.xml"
-    if not xml_candidate.exists():
-        xml_candidate = RAW_DIR / "drugbank.xml"
-
-    if xml_candidate.exists() and not args.force_fallback:
-        df = parse_drugbank_xml(xml_candidate)
-        source = f"DrugBank 5.0 XML ({xml_candidate.name})"
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--xml", help="path to DrugBank full_database.xml (licensed)")
+    g.add_argument("--csv", help="open DDI pair table: local path or http(s) URL")
+    ap.add_argument("--out", default=str(RAW_DIR))
+    for a in ("id1", "id2", "label", "name1", "name2", "smiles1", "smiles2"):
+        ap.add_argument(f"--{a}", help=f"column name for {a} (auto-detected if omitted)")
+    a = ap.parse_args()
+    if a.xml:
+        parse_xml(a.xml, a.out)
     else:
-        logger.warning(f"DrugBank XML not found at {xml_candidate}. Falling back to open mirror.")
-        df = download_open_ddi_fallback()
-        source = "Open-Access DDI Mirror (TDC)"
-
-    # Save output
-    if output_path.suffix == ".parquet":
-        df.to_parquet(output_path, index=False)
-    else:
-        df.to_csv(output_path, index=False)
-
-    # Save metadata summary
-    metadata = {
-        "source": source,
-        "num_records": len(df),
-        "unique_drugs": len(set(df["drug_id_1"]).union(set(df["drug_id_2"]))),
-        "has_smiles": bool("smiles_1" in df.columns and df["smiles_1"].notna().any()),
-        "output_file": str(output_path.name),
-    }
-    with open(DEFAULT_META_FILE, "w") as f:
-        json.dump(metadata, f, indent=2)
-
-    logger.info(f"Done! Saved {len(df):,} interactions to {output_path}")
-    logger.info(f"Metadata saved to {DEFAULT_META_FILE}")
+        from_csv(a.csv, a.out, a.id1, a.id2, a.label, a.name1, a.name2, a.smiles1, a.smiles2)
 
 
 if __name__ == "__main__":
