@@ -1,5 +1,7 @@
 numpy
 pandas
+pyarrow
+datasets
 scikit-learn
 rdkit
 torch
