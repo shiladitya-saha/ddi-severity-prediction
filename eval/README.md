@@ -79,7 +79,7 @@ cold = drug_disjoint_split(edge_index, labels, seed=42)   # no drug in both trai
 from eval.attention_viz import AttentionCapture, save_figures
 
 with AttentionCapture(model) as cap:        # works on any torch module
-    logits = model(x, edge_index, edge_attr)
+    logits = model.encode(x, edge_index, edge_attr)   # M4's model exposes encode()
 att = cap.merged()                          # (E,) attention per edge
 
 save_figures(att, edge_index, mechanism_matrix=mech, labels=labels,
