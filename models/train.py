@@ -16,6 +16,7 @@ validation/test metrics are the held-out estimates.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import random
 from dataclasses import dataclass
@@ -239,8 +240,77 @@ def _graph_field(graph: Any, name: str) -> Any:
     return getattr(graph, name, None)
 
 
-def load_binary_inputs(graph_path: str | Path, features_path: str | Path) -> tuple[list[str], torch.Tensor, torch.Tensor]:
-    """Load a processed PyG/dict graph and M2's ``{drug_id: feature}`` bundle."""
+def _load_node_ids(nodes_path: Path) -> list[str]:
+    """Read M1's processed nodes table in its serialized node-index order."""
+    if not nodes_path.is_file():
+        raise FileNotFoundError(
+            f"M1 graph has no drug_id field; its companion node table is missing: {nodes_path}"
+        )
+    with nodes_path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if not reader.fieldnames or "drug_id" not in reader.fieldnames:
+            raise ValueError(f"M1 nodes table must contain a drug_id column: {nodes_path}")
+        rows = list(reader)
+    ids = [str(row["drug_id"]).strip() for row in rows]
+    if not ids or any(not drug_id for drug_id in ids):
+        raise ValueError(f"M1 nodes table contains no IDs or blank drug IDs: {nodes_path}")
+    if len(set(ids)) != len(ids):
+        raise ValueError(f"M1 nodes table contains duplicate drug IDs: {nodes_path}")
+    if "node_idx" in (reader.fieldnames or []):
+        try:
+            node_indices = [int(row["node_idx"]) for row in rows]
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"M1 nodes table has invalid node_idx values: {nodes_path}") from error
+        if node_indices != list(range(len(ids))):
+            raise ValueError("M1 node_idx must match the row order used by graph.pt")
+    return ids
+
+
+def _validated_graph_edges(graph: Any, edge_index: Any, num_nodes: int) -> torch.Tensor:
+    """Validate M1's edge tensor before converting it to canonical pair indices."""
+    raw_edges = torch.as_tensor(edge_index, device="cpu")
+    if raw_edges.ndim != 2 or raw_edges.size(0) != 2:
+        raise ValueError("graph edge_index must have shape [2, num_edges]")
+    if raw_edges.dtype not in (torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8):
+        raise TypeError("graph edge_index must contain integer node indices")
+    edges = raw_edges.to(dtype=torch.long)
+    if edges.numel() and (edges.min().item() < 0 or edges.max().item() >= num_nodes):
+        raise ValueError(f"graph edge_index contains an index outside [0, {num_nodes})")
+    if edges.size(1) and torch.any(edges[0] == edges[1]):
+        raise ValueError("graph edge_index contains self-interactions")
+
+    # M1 serializes each labeled pair in both directions and repeats its label.
+    severity = _graph_field(graph, "edge_severity")
+    if severity is not None:
+        severity = torch.as_tensor(severity, device="cpu")
+        if severity.ndim != 1 or severity.numel() != edges.size(1):
+            raise ValueError("graph edge_severity must have one value per edge_index column")
+        if severity.dtype not in (torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8):
+            if not severity.is_floating_point() or not torch.equal(severity, severity.round()):
+                raise TypeError("graph edge_severity must contain integer labels")
+        if severity.numel() and (severity.min().item() < 0 or severity.max().item() > 2):
+            raise ValueError("graph edge_severity labels must be in {0, 1, 2}")
+        labels_by_pair: dict[tuple[int, int], int] = {}
+        for pair, label in zip(edges.t().tolist(), severity.to(torch.long).tolist()):
+            key = tuple(sorted(pair))
+            previous = labels_by_pair.setdefault(key, label)
+            if previous != label:
+                raise ValueError(f"duplicate/reversed graph edges disagree on severity for {key}")
+    return canonicalize_pairs(edges, num_nodes)
+
+
+def load_binary_inputs(
+    graph_path: str | Path,
+    features_path: str | Path,
+    *,
+    nodes_path: str | Path | None = None,
+) -> tuple[list[str], torch.Tensor, torch.Tensor]:
+    """Load M1's graph and M2's ``{drug_id: feature}`` bundle.
+
+    M1's current Day-2 ``graph.pt`` stores ``edge_index``, ``edge_severity``
+    and ``num_nodes`` but omits IDs. In that case the companion ``nodes.csv``
+    is required; its row order (and optional ``node_idx``) defines graph IDs.
+    """
     graph_path, features_path = Path(graph_path), Path(features_path)
     if not graph_path.exists():
         raise FileNotFoundError(
@@ -254,9 +324,22 @@ def load_binary_inputs(graph_path: str | Path, features_path: str | Path) -> tup
     features_by_id = torch.load(features_path, map_location="cpu", weights_only=False)
     drug_ids = _graph_field(graph, "drug_id")
     edge_index = _graph_field(graph, "edge_index")
-    if drug_ids is None or edge_index is None:
-        raise ValueError("processed graph must expose drug_id and edge_index")
-    drug_ids = [str(drug_id) for drug_id in drug_ids]
+    if edge_index is None:
+        raise ValueError("processed graph must expose edge_index")
+    if drug_ids is None:
+        companion_nodes = Path(nodes_path) if nodes_path is not None else graph_path.parent / "nodes.csv"
+        drug_ids = _load_node_ids(companion_nodes)
+    else:
+        drug_ids = [str(drug_id).strip() for drug_id in drug_ids]
+        if not drug_ids or any(not drug_id for drug_id in drug_ids):
+            raise ValueError("processed graph contains no drug IDs or blank drug IDs")
+        if len(set(drug_ids)) != len(drug_ids):
+            raise ValueError("processed graph contains duplicate drug IDs")
+    declared_num_nodes = _graph_field(graph, "num_nodes")
+    if declared_num_nodes is not None and int(declared_num_nodes) != len(drug_ids):
+        raise ValueError(
+            f"graph num_nodes={int(declared_num_nodes)} does not match {len(drug_ids)} drug IDs"
+        )
     if not isinstance(features_by_id, Mapping):
         raise TypeError("feature bundle must be a mapping {drug_id: feature_tensor}")
     # Graph IDs are strings in the shared contract; normalize feature mapping
@@ -268,7 +351,7 @@ def load_binary_inputs(graph_path: str | Path, features_path: str | Path) -> tup
             raise ValueError(f"feature mapping has duplicate normalized drug ID {normalized_key!r}")
         normalized_features[normalized_key] = value
     x = align_node_features(drug_ids, normalized_features)
-    positives = canonicalize_pairs(torch.as_tensor(edge_index, dtype=torch.long), len(drug_ids))
+    positives = _validated_graph_edges(graph, edge_index, len(drug_ids))
     if positives.size(1) == 0:
         raise ValueError("processed graph has no positive interaction edges")
     return drug_ids, x, positives
@@ -451,13 +534,17 @@ def run_dry_run(
     epochs: int = 20,
     batch_size: int = 256,
     seed: int = 17,
+    negative_ratio: float = 1.0,
     checkpoint_path: str | Path = "models/checkpoints/model1_binary_baseline.pt",
     results_path: str | Path = "results/model1_dry_run.json",
     device: str | None = None,
+    dataset_kind: str = "project_artifacts",
 ) -> dict[str, Any]:
     """Load real M1/M2 artifacts, train, and write a compact result record."""
     drug_ids, x, positives = load_binary_inputs(graph_path, features_path)
-    split = build_binary_edge_split(positives, len(drug_ids), seed=seed)
+    split = build_binary_edge_split(
+        positives, len(drug_ids), negative_ratio=negative_ratio, seed=seed
+    )
     model = BinaryBaselineGNN(num_node_features=x.size(1))
     outcome = train_binary_model(
         model, x, split.message_edge_index, split.train_pairs, split.train_labels,
@@ -473,6 +560,7 @@ def run_dry_run(
     )
     result = {
         "experiment": "model1_binary_baseline_dry_run",
+        "dataset_kind": dataset_kind,
         "data_source": str(graph_path),
         "feature_source": str(features_path),
         "num_drugs": len(drug_ids),
@@ -484,6 +572,7 @@ def run_dry_run(
             "test": int(split.test_labels.numel()),
         },
         "negative_sampling": "uniform random unordered non-edges; unobserved positives may be false negatives",
+        "negative_ratio": negative_ratio,
         "held_out_positive_edges_in_message_graph": 0,
         **outcome,
         "test_loss": test_loss,
@@ -496,6 +585,43 @@ def run_dry_run(
     return result
 
 
+def run_synthetic_dry_run(
+    *,
+    epochs: int = 20,
+    batch_size: int = 32,
+    seed: int = 17,
+    results_path: str | Path = "results/model1_synthetic_dry_run.json",
+    device: str | None = None,
+) -> dict[str, Any]:
+    """Run the same pipeline on an explicitly synthetic two-group fixture."""
+    import tempfile
+
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    num_per_group = 8
+    drug_ids = [f"SYNTHETIC-{i:03d}" for i in range(2 * num_per_group)]
+    features = torch.zeros((len(drug_ids), 2), dtype=torch.float32)
+    features[:num_per_group, 0] = 1.0
+    features[num_per_group:, 1] = 1.0
+    positives = torch.tensor(
+        [(left, right) for left in range(num_per_group)
+         for right in range(num_per_group, 2 * num_per_group)],
+        dtype=torch.long,
+    ).t().contiguous()
+    # Small deterministic noise prevents the fixture from being a constant-only input.
+    features += 0.01 * torch.randn(features.shape, generator=generator)
+    with tempfile.TemporaryDirectory(prefix="ddi_m3_synthetic_") as tmp:
+        root = Path(tmp)
+        graph_path, features_path = root / "graph.pt", root / "features.pt"
+        torch.save({"drug_id": drug_ids, "edge_index": positives}, graph_path)
+        torch.save({drug_id: features[i] for i, drug_id in enumerate(drug_ids)}, features_path)
+        result = run_dry_run(
+            graph_path, features_path, epochs=epochs, batch_size=batch_size, seed=seed,
+            negative_ratio=0.8, checkpoint_path=root / "model.pt",
+            results_path=results_path, device=device, dataset_kind="synthetic_fixture",
+        )
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--graph", default="data/processed/graph.pt")
@@ -504,15 +630,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--negative-ratio", type=float, default=1.0)
+    parser.add_argument(
+        "--synthetic", action="store_true",
+        help="run a synthetic-only pipeline check; metrics do not represent project data",
+    )
     parser.add_argument("--checkpoint", default="models/checkpoints/model1_binary_baseline.pt")
-    parser.add_argument("--results", default="results/model1_dry_run.json")
+    parser.add_argument("--results", default=None)
     args = parser.parse_args(argv)
     try:
-        result = run_dry_run(
-            args.graph, args.features, epochs=args.epochs, batch_size=args.batch_size,
-            seed=args.seed, device=args.device,
-            checkpoint_path=args.checkpoint, results_path=args.results,
-        )
+        if args.synthetic:
+            result = run_synthetic_dry_run(
+                epochs=args.epochs, batch_size=args.batch_size, seed=args.seed,
+                device=args.device,
+                results_path=args.results or "results/model1_synthetic_dry_run.json",
+            )
+        else:
+            result = run_dry_run(
+                args.graph, args.features, epochs=args.epochs, batch_size=args.batch_size,
+                seed=args.seed, negative_ratio=args.negative_ratio, device=args.device,
+                checkpoint_path=args.checkpoint,
+                results_path=args.results or "results/model1_dry_run.json",
+            )
     except (FileNotFoundError, ValueError, TypeError, RuntimeError) as error:
         parser.error(str(error))
     print(json.dumps({
