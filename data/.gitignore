@@ -1,0 +1,10 @@
+# Raw datasets & archives (per contributing guidelines)
+raw/
+*.xml
+*.zip
+*.tar.gz
+*.parquet
+*.pt
+
+# Keep placeholder for folder structure
+!.gitkeep
