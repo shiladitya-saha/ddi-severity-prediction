@@ -17,3 +17,4 @@
 ## File contract (do not change without telling the team)
 `processed/graph.pt` must expose: `drug_id`, `edge_index`, `severity_label {0,1,2}`,
 plus any raw mechanism tags needed by `features/mechanism_extraction.py`.
+**Source data (not in repo):** `DDI_data.csv` from Mendeley Data, "data of multiple-type drug-drug interactions" (DrugBank v5.1-derived): https://data.mendeley.com/datasets/md5czfsfnd. Download it manually, check its licence, and run `python data/download_drugbank.py --csv path/to/DDI_data.csv`.
