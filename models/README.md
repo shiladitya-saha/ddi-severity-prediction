@@ -113,6 +113,67 @@ does not invoke the unittest suite.
   and metric protocol before comparing binary interaction detection with
   three-class severity results.
 
+## M4 → M3 handoff: CORAL components (`models/ordinal_loss.py`)
+
+Already on `origin/main` and `origin/dev` (first committed in `ba6bf49`). Import:
+
+```python
+from models.ordinal_loss import CoralHead, CoralLoss, coral_logits_to_probs, coral_predict
+```
+
+| Piece | Input | Output |
+|---|---|---|
+| `CoralHead(in_dim, num_classes=3)` | features `[N, in_dim]` | logits `[N, K-1]` (K=3 → 2 columns: P(sev>0), P(sev>1)) |
+| `CoralLoss(num_classes=3, class_weights=None)` | logits `[N, K-1]`, int64 labels `[N]` in `{0,1,2}` | scalar loss |
+| `coral_logits_to_probs(logits)` | `[N, K-1]` | class probabilities `[N, K]` (minor, moderate, major) |
+| `coral_predict(logits)` | `[N, K-1]` | int severity `[N]` = number of logits > 0 |
+
+`class_weights` is a `[3]` tensor ordered minor, moderate, major (M1's `data/processed/class_weights.json`).
+Labels outside `[0, K-1]` raise `ValueError`. Thresholds are kept strictly ordered by construction
+(softplus gaps), so probabilities are always non-negative.
+
+```python
+head, loss_fn = CoralHead(hidden_dim), CoralLoss(class_weights=w)   # w: tensor([w_minor, w_mod, w_major])
+logits = head(pair_embedding)            # [N, 2]
+loss = loss_fn(logits, severity)         # severity: LongTensor [N]
+probs = coral_logits_to_probs(logits)    # [N, 3]
+pred = coral_predict(logits)             # [N] in {0,1,2}
+```
+
+For M5 metrics pass `probs` (or `eval.metrics.coral_to_labels` on cumulative probs). Working end-to-end
+example: `models/mechanism_gnn.py` + `models/train_mechanism.py`; tests in `tests/test_mechanism_model.py`.
+
+## M4: Model 3 — Mechanism-Aware Ordinal GNN (Day 3)
+
+Results and caveats: `results/model3_day3_summary.md`.
+
+| File | Purpose |
+|---|---|
+| `mechanism_gnn.py` | GATv2 over drug fingerprints, mechanism tags as edge features, CORAL head |
+| `train_mechanism.py` | Trains and evaluates Model 3 on M5's split; writes `results/<tag>_results.json` + `_details.json` |
+| `few_shot.py` | New-drug experiment on M5's drug-disjoint split → `results/few_shot_results.json` |
+| `build_m4_inputs.py` | Builds fingerprints + mechanism edges while M2's `features/build_features.py` is blocked |
+
+Setup, from the repo root (M1's pipeline must have produced `data/processed/nodes.csv` and `edges_labeled.csv`):
+
+```bash
+python -m models.build_m4_inputs       # PubChem SMILES lookup (~30 min, resumable) -> fingerprints, mechanism edges
+python -m models.train_mechanism --tag model3 --epochs 100 --patience 5     # ~25 min on CPU
+python -m models.few_shot --epochs 100 --patience 5
+python -m unittest tests.test_train_mechanism tests.test_mechanism_model
+```
+
+Protocol (use the same for Model 2 so the comparison is fair):
+- Split: `eval.split.make_splits(seed=42)`, 70/15/15 stratified, 15% of MAJOR edges held out as the severe subset.
+- Class weights: inverse frequency on the **training** labels (M1's formula).
+- Epoch: best validation macro F1 (early stopping, patience 5, cap 100); test is scored once.
+- Message passing uses training edges only. While a training pair is scored its own edge is removed.
+- **The scored pair's own mechanism tags are not an input.** M1's labels and M2's tags both come from the same
+  interaction text, so those tags alone predict severity (74% vs 54% majority class). `--pair-mechanism` turns
+  them on for the leak ablation only.
+- Outputs are `{tag}_results.json` (M5 `EvalResult`, test split) and `{tag}_details.json` (config, split sizes, history).
+  Checkpoints go to `models/checkpoints/` (git-ignored).
+
 ## Day 3 (needs `data/processed/` + `features/full_features.pt`)
 - M3: run Model 1 and Model 2, then save `results/model1_results.json` and `results/model2_results.json` when Model 2's ordinal dependency is integrated.
 - M4: run Model 3 (mechanism-aware ordinal) + `few_shot.py` (MAML/contrastive for new-drug generalization) → `results/model3_results.json`
