@@ -1,11 +1,529 @@
-"""
-train.py
-Owner: M3 + M4 — see models/README.md for day/deadline and output contract.
+"""Training utilities and CLI for Model 1, the binary interaction baseline.
+
+Example after M1 provides ``data/processed/graph.pt`` and M2 provides
+``features/full_features.pt``::
+
+    python -m models.train --epochs 20 --seed 17
+
+Observed positive interaction pairs are canonicalized as undirected pairs.
+Uniformly sampled non-edges are treated as negatives (and may contain
+unobserved interactions). The validation and test positive pairs are removed
+from the message-passing graph. The current split intentionally retains
+training positives in that graph, so training metrics are diagnostic only;
+validation/test metrics are the held-out estimates.
 """
 
-def main():
-    raise NotImplementedError
+from __future__ import annotations
+
+import argparse
+import json
+import random
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Mapping
+
+import numpy as np
+import torch
+from sklearn.metrics import average_precision_score, f1_score, roc_auc_score
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
+
+from models.baseline_gnn import BinaryBaselineGNN
+
+
+@dataclass
+class BinaryEdgeSplit:
+    """Pair-level binary split and the training-only message-passing graph."""
+
+    message_edge_index: torch.Tensor
+    train_pairs: torch.Tensor
+    train_labels: torch.Tensor
+    validation_pairs: torch.Tensor
+    validation_labels: torch.Tensor
+    test_pairs: torch.Tensor
+    test_labels: torch.Tensor
+    context_positive_pairs: torch.Tensor
+
+
+def set_seed(seed: int) -> None:
+    """Seed Python, NumPy, CPU Torch and CUDA Torch RNGs."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    if hasattr(torch.backends, "cudnn"):
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+
+def resolve_device(device: str | torch.device | None = None) -> torch.device:
+    """Resolve an explicit device or select CUDA when available."""
+    if device is not None:
+        resolved = torch.device(device)
+        if resolved.type == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("CUDA was requested but is not available")
+        return resolved
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def canonicalize_pairs(pairs: torch.Tensor, num_nodes: int) -> torch.Tensor:
+    """Return unique ``[2, P]`` unordered pairs; reject self/out-of-range pairs."""
+    pairs = torch.as_tensor(pairs, dtype=torch.long, device="cpu")
+    if pairs.ndim != 2 or pairs.size(0) != 2:
+        raise ValueError("pairs must have shape [2, num_pairs]")
+    if pairs.numel() and (pairs.min().item() < 0 or pairs.max().item() >= num_nodes):
+        raise ValueError(f"pairs contain node indices outside [0, {num_nodes})")
+    if pairs.size(1) and torch.any(pairs[0] == pairs[1]):
+        raise ValueError("self-pairs are not valid DDI examples")
+    ordered = torch.sort(pairs, dim=0).values.t().contiguous()
+    ordered = torch.unique(ordered, dim=0, sorted=True)
+    return ordered.t().contiguous()
+
+
+def _sample_negative_pairs(
+    num_nodes: int,
+    positive_pairs: torch.Tensor,
+    count: int,
+    generator: torch.Generator,
+) -> torch.Tensor:
+    """Uniformly rejection-sample unique unordered pairs absent from positives."""
+    if count == 0:
+        return torch.empty((2, 0), dtype=torch.long)
+    possible = num_nodes * (num_nodes - 1) // 2
+    positive = {tuple(pair) for pair in positive_pairs.t().tolist()}
+    if count > possible - len(positive):
+        raise ValueError("requested more negative pairs than the graph has non-edges")
+
+    negatives: set[tuple[int, int]] = set()
+    attempts = 0
+    max_attempts = max(10_000, count * 100)
+    while len(negatives) < count and attempts < max_attempts:
+        candidates = torch.randint(num_nodes, (2, max(256, min(count, 8192))), generator=generator)
+        for a, b in candidates.t().tolist():
+            attempts += 1
+            if a == b:
+                continue
+            pair = (a, b) if a < b else (b, a)
+            if pair not in positive:
+                negatives.add(pair)
+                if len(negatives) == count:
+                    break
+        if attempts >= max_attempts:
+            break
+    if len(negatives) != count:
+        raise RuntimeError(
+            "negative-pair rejection sampling stalled; the graph may be too dense"
+        )
+    return torch.tensor(sorted(negatives), dtype=torch.long).t().contiguous()
+
+
+def _partition_indices(count: int, validation_fraction: float, test_fraction: float,
+                       generator: torch.Generator) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    if not 0.0 < validation_fraction < 1.0:
+        raise ValueError("validation_fraction must be between 0 and 1")
+    if not 0.0 < test_fraction < 1.0:
+        raise ValueError("test_fraction must be between 0 and 1")
+    if validation_fraction + test_fraction >= 1.0:
+        raise ValueError("validation_fraction + test_fraction must be less than 1")
+    if count < 3:
+        raise ValueError("at least three examples of each class are required")
+
+    order = torch.randperm(count, generator=generator)
+    n_validation = max(1, int(round(count * validation_fraction)))
+    n_test = max(1, int(round(count * test_fraction)))
+    if n_validation + n_test >= count:
+        n_validation = max(1, min(n_validation, count - 2))
+        n_test = max(1, count - n_validation - 1)
+    n_train = count - n_validation - n_test
+    if n_train < 1:
+        raise ValueError("split leaves no training examples")
+    return order[:n_train], order[n_train:n_train + n_validation], order[n_train + n_validation:]
+
+
+def _combine_examples(
+    positives: torch.Tensor,
+    negatives: torch.Tensor,
+    positive_indices: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+    negative_indices: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+    generator: torch.Generator,
+) -> tuple[tuple[torch.Tensor, torch.Tensor], ...]:
+    positive_splits = [positives[:, ix] for ix in positive_indices]
+    negative_splits = [negatives[:, ix] for ix in negative_indices]
+    result = []
+    for pos, neg in zip(positive_splits, negative_splits):
+        pairs = torch.cat((pos, neg), dim=1)
+        labels = torch.cat((torch.ones(pos.size(1)), torch.zeros(neg.size(1))))
+        order = torch.randperm(pairs.size(1), generator=generator)
+        result.append((pairs[:, order].contiguous(), labels[order].float()))
+    return tuple(result)
+
+
+def build_binary_edge_split(
+    positive_pairs: torch.Tensor,
+    num_nodes: int,
+    *,
+    validation_fraction: float = 0.15,
+    test_fraction: float = 0.15,
+    negative_ratio: float = 1.0,
+    seed: int = 17,
+) -> BinaryEdgeSplit:
+    """Split undirected interactions and negatives without held-out edge leakage.
+
+    Negatives are sampled uniformly from unordered non-edges. Message passing
+    uses only training positive pairs, represented in both directions. All
+    reversed/duplicate positives are collapsed before splitting.
+    """
+    if num_nodes < 2:
+        raise ValueError("at least two nodes are required")
+    if negative_ratio <= 0:
+        raise ValueError("negative_ratio must be positive")
+    positives = canonicalize_pairs(positive_pairs, num_nodes)
+    if positives.size(1) < 3:
+        raise ValueError("at least three unique positive pairs are required")
+
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    negative_count = max(3, int(round(positives.size(1) * negative_ratio)))
+    negatives = _sample_negative_pairs(num_nodes, positives, negative_count, generator)
+    positive_indices = _partition_indices(
+        positives.size(1), validation_fraction, test_fraction, generator
+    )
+    negative_indices = _partition_indices(
+        negatives.size(1), validation_fraction, test_fraction, generator
+    )
+    positive_splits = [positives[:, ix] for ix in positive_indices]
+    negative_splits = [negatives[:, ix] for ix in negative_indices]
+
+    datasets = _combine_examples(
+        positives, negatives, positive_indices, negative_indices, generator
+    )
+    # Make the message-passing topology from training positives only; the
+    # validation and test positive target pairs are absent in either direction.
+    context_positive = positive_splits[0]
+    message_edges = torch.cat((context_positive, context_positive.flip(0)), dim=1)
+    return BinaryEdgeSplit(
+        message_edge_index=message_edges.contiguous(),
+        train_pairs=datasets[0][0], train_labels=datasets[0][1],
+        validation_pairs=datasets[1][0], validation_labels=datasets[1][1],
+        test_pairs=datasets[2][0], test_labels=datasets[2][1],
+        context_positive_pairs=context_positive,
+    )
+
+
+def align_node_features(
+    drug_ids: list[str] | tuple[str, ...],
+    features_by_id: Mapping[str, torch.Tensor],
+) -> torch.Tensor:
+    """Stack an ID-keyed feature mapping in graph node order, without sorting IDs."""
+    missing = [drug_id for drug_id in drug_ids if drug_id not in features_by_id]
+    if missing:
+        sample = ", ".join(map(str, missing[:5]))
+        raise ValueError(f"features missing for {len(missing)} graph drugs (for example: {sample})")
+    rows = [torch.as_tensor(features_by_id[drug_id], dtype=torch.float32) for drug_id in drug_ids]
+    if not rows:
+        raise ValueError("graph has no drug IDs")
+    if any(row.ndim != 1 for row in rows):
+        raise ValueError("each drug feature must be a one-dimensional vector")
+    widths = {row.numel() for row in rows}
+    if len(widths) != 1:
+        raise ValueError("drug feature vectors have inconsistent widths")
+    features = torch.stack(rows)
+    if not torch.isfinite(features).all():
+        raise ValueError("node features contain NaN or Inf values")
+    return features
+
+
+def _graph_field(graph: Any, name: str) -> Any:
+    if isinstance(graph, Mapping):
+        return graph.get(name)
+    return getattr(graph, name, None)
+
+
+def load_binary_inputs(graph_path: str | Path, features_path: str | Path) -> tuple[list[str], torch.Tensor, torch.Tensor]:
+    """Load a processed PyG/dict graph and M2's ``{drug_id: feature}`` bundle."""
+    graph_path, features_path = Path(graph_path), Path(features_path)
+    if not graph_path.exists():
+        raise FileNotFoundError(
+            f"processed graph not found: {graph_path}. M1 must produce a graph with drug_id and edge_index."
+        )
+    if not features_path.exists():
+        raise FileNotFoundError(
+            f"feature bundle not found: {features_path}. M2 must produce full_features.pt keyed by drug_id."
+        )
+    graph = torch.load(graph_path, map_location="cpu", weights_only=False)
+    features_by_id = torch.load(features_path, map_location="cpu", weights_only=False)
+    drug_ids = _graph_field(graph, "drug_id")
+    edge_index = _graph_field(graph, "edge_index")
+    if drug_ids is None or edge_index is None:
+        raise ValueError("processed graph must expose drug_id and edge_index")
+    drug_ids = [str(drug_id) for drug_id in drug_ids]
+    if not isinstance(features_by_id, Mapping):
+        raise TypeError("feature bundle must be a mapping {drug_id: feature_tensor}")
+    # Graph IDs are strings in the shared contract; normalize feature mapping
+    # keys once while rejecting ambiguous collisions.
+    normalized_features: dict[str, torch.Tensor] = {}
+    for key, value in features_by_id.items():
+        normalized_key = str(key)
+        if normalized_key in normalized_features:
+            raise ValueError(f"feature mapping has duplicate normalized drug ID {normalized_key!r}")
+        normalized_features[normalized_key] = value
+    x = align_node_features(drug_ids, normalized_features)
+    positives = canonicalize_pairs(torch.as_tensor(edge_index, dtype=torch.long), len(drug_ids))
+    if positives.size(1) == 0:
+        raise ValueError("processed graph has no positive interaction edges")
+    return drug_ids, x, positives
+
+
+def binary_metrics(labels: torch.Tensor, logits: torch.Tensor) -> dict[str, float | None]:
+    """Calculate thresholded metrics and ROC-AUC/AP when both classes exist."""
+    y_true = labels.detach().cpu().numpy().astype(np.int64)
+    scores = logits.detach().cpu().numpy()
+    predictions = (scores >= 0.0).astype(np.int64)
+    both_classes = len(np.unique(y_true)) == 2
+    return {
+        "accuracy": float((predictions == y_true).mean()),
+        "f1": float(f1_score(y_true, predictions, zero_division=0)),
+        "roc_auc": float(roc_auc_score(y_true, scores)) if both_classes else None,
+        "average_precision": float(average_precision_score(y_true, scores)) if both_classes else None,
+    }
+
+
+def _run_batches(
+    model: BinaryBaselineGNN,
+    x: torch.Tensor,
+    edge_index: torch.Tensor,
+    pairs: torch.Tensor,
+    labels: torch.Tensor,
+    criterion: nn.Module,
+    *,
+    device: torch.device,
+    batch_size: int,
+    optimizer: torch.optim.Optimizer | None = None,
+    seed: int = 17,
+) -> tuple[float, torch.Tensor]:
+    if pairs.size(1) != labels.numel():
+        raise ValueError("number of pairs and labels must match")
+    training = optimizer is not None
+    model.train(training)
+    labels = labels.reshape(-1).float()
+    dataset = TensorDataset(pairs.t().contiguous(), labels)
+    generator = torch.Generator().manual_seed(seed)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=training, generator=generator)
+    total_loss = 0.0
+    logits_all = []
+    for batch_pairs, batch_labels in loader:
+        batch_pairs = batch_pairs.t().contiguous().to(device)
+        batch_labels = batch_labels.to(device)
+        if training:
+            optimizer.zero_grad(set_to_none=True)
+        with torch.set_grad_enabled(training):
+            logits = model(x, edge_index, batch_pairs)
+            if not torch.isfinite(logits).all():
+                raise FloatingPointError("model produced non-finite logits")
+            loss = criterion(logits, batch_labels)
+            if not torch.isfinite(loss):
+                raise FloatingPointError("model produced a non-finite loss")
+            if training:
+                loss.backward()
+                optimizer.step()
+        total_loss += loss.detach().item() * batch_labels.numel()
+        logits_all.append(logits.detach().cpu())
+    if not logits_all:
+        raise ValueError("cannot run an epoch with no examples")
+    return total_loss / len(dataset), torch.cat(logits_all)
+
+
+def save_checkpoint(
+    path: str | Path,
+    model: BinaryBaselineGNN,
+    optimizer: torch.optim.Optimizer,
+    *,
+    epoch: int,
+    seed: int,
+    validation_loss: float,
+) -> None:
+    """Save a resumable checkpoint under the caller-selected path."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save({
+        "model_config": model.config,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "epoch": int(epoch),
+        "seed": int(seed),
+        "validation_loss": float(validation_loss),
+    }, path)
+
+
+def load_checkpoint(
+    path: str | Path,
+    model: BinaryBaselineGNN,
+    optimizer: torch.optim.Optimizer | None = None,
+    *,
+    device: str | torch.device = "cpu",
+) -> dict[str, Any]:
+    """Restore model (and optionally optimizer) state from a checkpoint."""
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
+    if checkpoint.get("model_config") != model.config:
+        raise ValueError("checkpoint model configuration does not match the supplied model")
+    model.load_state_dict(checkpoint["model_state_dict"])
+    if optimizer is not None:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    return checkpoint
+
+
+def train_binary_model(
+    model: BinaryBaselineGNN,
+    x: torch.Tensor,
+    message_edge_index: torch.Tensor,
+    train_pairs: torch.Tensor,
+    train_labels: torch.Tensor,
+    validation_pairs: torch.Tensor,
+    validation_labels: torch.Tensor,
+    *,
+    epochs: int = 20,
+    batch_size: int = 256,
+    learning_rate: float = 1e-3,
+    weight_decay: float = 1e-4,
+    seed: int = 17,
+    device: str | torch.device | None = None,
+    checkpoint_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Train the binary model and retain the checkpoint with best val loss."""
+    if epochs < 1 or batch_size < 1:
+        raise ValueError("epochs and batch_size must be positive")
+    if learning_rate <= 0.0 or weight_decay < 0.0:
+        raise ValueError("learning_rate must be positive and weight_decay non-negative")
+    set_seed(seed)
+    device = resolve_device(device)
+    model = model.to(device)
+    x = x.to(device)
+    message_edge_index = message_edge_index.to(device)
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    history: list[dict[str, Any]] = []
+    best_validation_loss = float("inf")
+    best_epoch = 0
+
+    for epoch in range(1, epochs + 1):
+        train_loss, _ = _run_batches(
+            model, x, message_edge_index, train_pairs, train_labels, criterion,
+            device=device, batch_size=batch_size, optimizer=optimizer, seed=seed + epoch,
+        )
+        validation_loss, validation_logits = _run_batches(
+            model, x, message_edge_index, validation_pairs, validation_labels, criterion,
+            device=device, batch_size=batch_size, seed=seed,
+        )
+        row = {
+            "epoch": epoch,
+            "train_loss": train_loss,
+            "validation_loss": validation_loss,
+            "validation_metrics": binary_metrics(validation_labels, validation_logits),
+        }
+        history.append(row)
+        if validation_loss < best_validation_loss:
+            best_validation_loss = validation_loss
+            best_epoch = epoch
+            if checkpoint_path is not None:
+                save_checkpoint(
+                    checkpoint_path, model, optimizer, epoch=epoch, seed=seed,
+                    validation_loss=validation_loss,
+                )
+    if checkpoint_path is not None:
+        load_checkpoint(checkpoint_path, model, optimizer, device=device)
+    return {
+        "history": history,
+        "best_epoch": best_epoch,
+        "best_validation_loss": best_validation_loss,
+        "device": str(device),
+        "seed": seed,
+        "model_config": model.config,
+        "optimizer": "Adam",
+        "learning_rate": learning_rate,
+        "weight_decay": weight_decay,
+    }
+
+
+def run_dry_run(
+    graph_path: str | Path = "data/processed/graph.pt",
+    features_path: str | Path = "features/full_features.pt",
+    *,
+    epochs: int = 20,
+    batch_size: int = 256,
+    seed: int = 17,
+    checkpoint_path: str | Path = "models/checkpoints/model1_binary_baseline.pt",
+    results_path: str | Path = "results/model1_dry_run.json",
+    device: str | None = None,
+) -> dict[str, Any]:
+    """Load real M1/M2 artifacts, train, and write a compact result record."""
+    drug_ids, x, positives = load_binary_inputs(graph_path, features_path)
+    split = build_binary_edge_split(positives, len(drug_ids), seed=seed)
+    model = BinaryBaselineGNN(num_node_features=x.size(1))
+    outcome = train_binary_model(
+        model, x, split.message_edge_index, split.train_pairs, split.train_labels,
+        split.validation_pairs, split.validation_labels, epochs=epochs,
+        batch_size=batch_size, seed=seed, device=device, checkpoint_path=checkpoint_path,
+    )
+    model.to(outcome["device"])
+    load_checkpoint(checkpoint_path, model, device=outcome["device"])
+    test_loss, test_logits = _run_batches(
+        model, x.to(outcome["device"]), split.message_edge_index.to(outcome["device"]),
+        split.test_pairs, split.test_labels, nn.BCEWithLogitsLoss(),
+        device=torch.device(outcome["device"]), batch_size=batch_size, seed=seed,
+    )
+    result = {
+        "experiment": "model1_binary_baseline_dry_run",
+        "data_source": str(graph_path),
+        "feature_source": str(features_path),
+        "num_drugs": len(drug_ids),
+        "num_unique_positive_pairs": positives.size(1),
+        "num_message_passing_edges": split.message_edge_index.size(1),
+        "split_sizes": {
+            "train": int(split.train_labels.numel()),
+            "validation": int(split.validation_labels.numel()),
+            "test": int(split.test_labels.numel()),
+        },
+        "negative_sampling": "uniform random unordered non-edges; unobserved positives may be false negatives",
+        "held_out_positive_edges_in_message_graph": 0,
+        **outcome,
+        "test_loss": test_loss,
+        "test_metrics": binary_metrics(split.test_labels, test_logits),
+        "checkpoint": str(checkpoint_path),
+    }
+    result_path = Path(results_path)
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    return result
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--graph", default="data/processed/graph.pt")
+    parser.add_argument("--features", default="features/full_features.pt")
+    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--seed", type=int, default=17)
+    parser.add_argument("--device", default=None)
+    parser.add_argument("--checkpoint", default="models/checkpoints/model1_binary_baseline.pt")
+    parser.add_argument("--results", default="results/model1_dry_run.json")
+    args = parser.parse_args(argv)
+    try:
+        result = run_dry_run(
+            args.graph, args.features, epochs=args.epochs, batch_size=args.batch_size,
+            seed=args.seed, device=args.device,
+            checkpoint_path=args.checkpoint, results_path=args.results,
+        )
+    except (FileNotFoundError, ValueError, TypeError, RuntimeError) as error:
+        parser.error(str(error))
+    print(json.dumps({
+        "best_epoch": result["best_epoch"],
+        "best_validation_loss": result["best_validation_loss"],
+        "test_loss": result["test_loss"],
+        "test_metrics": result["test_metrics"],
+        "checkpoint": result["checkpoint"],
+    }, indent=2))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
