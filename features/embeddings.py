@@ -10,19 +10,35 @@ mean-pooled embedding vector for one SMILES string. Falls back cleanly
 so a caller can treat a None return as "skip this optional feature" rather
 than a crash.
 
-STATUS (Day 2): verified the fallback path works cleanly, but actual
-ChemBERTa loading does NOT work in this environment today --
-`transformers==2.1.1` is installed (not pinned in requirements.txt) and
-predates HuggingFace Hub arbitrary repo-id resolution, so
-AutoTokenizer.from_pretrained("seyonec/ChemBERTa-zinc-base-v1") raises
-ValueError immediately (see main()'s output). Upgrading to
-transformers>=4.x and validating real embedding output end-to-end is
-deferred to Day 3/4 -- this is optional per features/README.md and not
-worth blocking the Day 2 deadline on.
+STATUS (Day 2, updated): `transformers` upgraded from the stray 2.1.1
+install to 4.57.6 (pinned `>=4.40,<5` in requirements.txt / environment.yml;
+no conflicts with this project's other pins -- `datasets` isn't actually
+installed in this environment, so its fsspec pin doesn't apply here).
+AutoTokenizer/AutoModel now resolve "seyonec/ChemBERTa-zinc-base-v1" from
+the Hub and get_pretrained_embedding() returns real mean-pooled [768]
+embeddings for both sample SMILES in main()'s smoke test (verified
+distinct, finite, non-zero-norm vectors -- not the None fallback).
 """
 
 _CHEMBERTA_MODEL_ID = "seyonec/ChemBERTa-zinc-base-v1"
+_CHEMBERTA_HIDDEN_SIZE = 768  # seyonec/ChemBERTa-zinc-base-v1's known hidden size
 _chemberta_cache = {"tokenizer": None, "model": None, "load_attempted": False}
+
+
+def get_embedding_dim(method="chemberta"):
+    """Return the embedding width get_pretrained_embedding() would produce.
+
+    Loads the model if needed so the returned width is authoritative when
+    loading succeeds; falls back to the known ChemBERTa hidden size if the
+    model can't be loaded, so callers can still size a zero-vector
+    placeholder consistently for drugs whose embedding fails.
+    """
+    if method != "chemberta":
+        raise ValueError(f"Unsupported method {method!r}; only 'chemberta' is implemented.")
+    _, model = _load_chemberta()
+    if model is not None:
+        return int(model.config.hidden_size)
+    return _CHEMBERTA_HIDDEN_SIZE
 
 
 def _load_chemberta():
