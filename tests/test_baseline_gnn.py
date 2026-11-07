@@ -12,7 +12,9 @@ from models.train import (
     align_node_features,
     build_binary_edge_split,
     load_checkpoint,
+    load_binary_inputs,
     run_dry_run,
+    run_synthetic_dry_run,
     train_binary_model,
 )
 
@@ -158,6 +160,55 @@ class BinaryBaselineTests(unittest.TestCase):
         self.assertEqual(aligned.tolist(), [[3.0, 4.0], [1.0, 2.0]])
         with self.assertRaises(ValueError):
             align_node_features(["missing"], {})
+
+    def test_loads_m1_day2_graph_using_companion_nodes_csv(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            ids = ["DB-B", "DB-A", "DB-C"]
+            (root / "nodes.csv").write_text(
+                "node_idx,drug_id\n0,DB-B\n1,DB-A\n2,DB-C\n", encoding="utf-8"
+            )
+            edges = torch.tensor([[0, 1, 1, 2], [1, 0, 2, 1]], dtype=torch.long)
+            torch.save({
+                "edge_index": edges,
+                "edge_severity": torch.tensor([2, 2, 0, 0]),
+                "num_nodes": 3,
+                "severity_names": ["minor", "moderate", "major"],
+            }, root / "graph.pt")
+            torch.save({
+                "DB-C": torch.tensor([30.0]),
+                "DB-A": torch.tensor([20.0]),
+                "DB-B": torch.tensor([10.0]),
+            }, root / "features.pt")
+            drug_ids, x, positives = load_binary_inputs(root / "graph.pt", root / "features.pt")
+        self.assertEqual(drug_ids, ids)
+        self.assertEqual(x[:, 0].tolist(), [10.0, 20.0, 30.0])
+        self.assertEqual({tuple(pair) for pair in positives.t().tolist()}, {(0, 1), (1, 2)})
+
+    def test_m1_adapter_rejects_bad_severity_alignment_and_ranges(self):
+        edges = torch.tensor([[0, 1], [1, 0]], dtype=torch.long)
+        with self.assertRaisesRegex(ValueError, "one value per edge"):
+            load_graph = {"edge_index": edges, "edge_severity": torch.tensor([1])}
+            from models.train import _validated_graph_edges
+            _validated_graph_edges(load_graph, edges, 2)
+        with self.assertRaisesRegex(ValueError, r"in \{0, 1, 2\}"):
+            from models.train import _validated_graph_edges
+            _validated_graph_edges(
+                {"edge_index": edges, "edge_severity": torch.tensor([3, 3])}, edges, 2
+            )
+
+    def test_synthetic_end_to_end_is_explicitly_labeled_and_finite(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = run_synthetic_dry_run(
+                epochs=2,
+                batch_size=32,
+                seed=13,
+                results_path=Path(temp_dir) / "synthetic.json",
+                device="cpu",
+            )
+            self.assertEqual(result["dataset_kind"], "synthetic_fixture")
+            self.assertTrue(torch.isfinite(torch.tensor(result["test_loss"])))
+            self.assertTrue(torch.isfinite(torch.tensor(result["best_validation_loss"])))
 
     def test_file_based_dry_run_writes_only_local_synthetic_artifacts(self):
         with tempfile.TemporaryDirectory() as temp_dir:
