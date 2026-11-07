@@ -1,7 +1,10 @@
 numpy
 pandas
+pyarrow
+datasets
 scikit-learn
 rdkit
+transformers>=4.40,<5
 torch
 torch-geometric
 ogb
