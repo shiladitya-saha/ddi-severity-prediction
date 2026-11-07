@@ -41,3 +41,10 @@ data/raw/**
 data/processed/**
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+
+!data/processed/.gitkeep
+!data/processed/class_weights.json
+!data/processed/severity_mapping.csv
+!data/severity_overrides.csv
+__pycache__/
+.pytest_cache/
