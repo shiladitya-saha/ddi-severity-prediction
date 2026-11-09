@@ -23,7 +23,7 @@ Usage
     from eval.attention_viz import AttentionCapture, mechanism_attribution, save_figures
 
     with AttentionCapture(model) as cap:
-        logits = model(data.x, data.edge_index, data.edge_attr)
+        logits = model.encode(data.x, data.edge_index, data.edge_attr)
     att = cap.merged()                      # (E,) attention per edge
 
     attr = mechanism_attribution(att, mech_matrix, MECHANISM_TAGS)
