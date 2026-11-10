@@ -48,3 +48,4 @@ data/processed/**
 !data/severity_overrides.csv
 __pycache__/
 .pytest_cache/
+!data/processed/twosides_summary.json
