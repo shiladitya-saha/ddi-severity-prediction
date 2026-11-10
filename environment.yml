@@ -17,3 +17,4 @@ dependencies:
       - torch-geometric
       - ogb
       - streamlit
+      - transformers>=4.40,<5
