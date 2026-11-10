@@ -49,3 +49,4 @@ data/processed/**
 __pycache__/
 .pytest_cache/
 !data/processed/twosides_summary.json
+"data/raw/pubchem_smiles.csv" 
