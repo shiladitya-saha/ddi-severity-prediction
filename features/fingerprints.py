@@ -100,19 +100,125 @@ def build_fingerprints(drug_to_smiles):
     return fingerprints, failures
 
 
-def load_smiles_lookup():
-    """Return a {drug_id: smiles} mapping for every drug_id data_loading.load_graph()
-    can produce.
+SMILES_SOURCE_PATH = "data/raw/drugbank_graph_nodes.csv"
+SMILES_CACHE_PATH = "data/raw/pubchem_smiles.csv"
+PUBCHEM_URL = (
+    "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/xref/RegistryID/"
+    "{}/property/SMILES/JSON"
+)
 
-    TODO (M1/M2 handoff): no such mapping exists yet. data/README.md's
-    file contract for processed/graph.pt is drug_id, edge_index,
-    severity_label, mechanism_tag -- it does not include SMILES. This needs
-    to come from somewhere (most likely parsed out of data/raw/drugbank_raw.*
-    by download_drugbank.py) before full-graph fingerprinting can run.
+
+def _load_local_smiles_csv(path):
+    """Read a {drug_id: smiles} mapping from a CSV with drug_id/smiles columns, if present."""
+    import csv
+    from pathlib import Path
+
+    csv_path = Path(path)
+    if not csv_path.exists():
+        return {}
+    lookup = {}
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            drug_id = row.get("drug_id")
+            smiles = row.get("smiles", "")
+            if drug_id and smiles:
+                lookup[drug_id] = smiles
+    return lookup
+
+
+def fetch_smiles_from_pubchem(drug_ids, cache_path=SMILES_CACHE_PATH, delay=0.25):
+    """Fetch SMILES for drug_ids missing from the local cache, via PubChem PUG REST
+    (xref RegistryID = DrugBank ID), and append results to cache_path.
+
+    Resumable: already-cached drug_ids are skipped. Same approach M4 used in
+    models/build_m4_inputs.py to unblock Model 3 while this was pending --
+    kept here so features/ (M2's actual deliverable) no longer depends on
+    that stand-in script.
+
+    M1's data/raw/drugbank_drugs_raw.csv smiles column is empty for all
+    1868 drugs (the Mendeley DDI_data.csv source has no structure data),
+    so this is the real SMILES source, not a fallback.
     """
-    raise NotImplementedError(
-        "No drug_id -> SMILES source is wired up yet (see load_smiles_lookup docstring)."
-    )
+    import csv
+    import json
+    import time
+    import urllib.error
+    import urllib.request
+    from pathlib import Path
+
+    cache_path = Path(cache_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    done = set()
+    if cache_path.exists():
+        with open(cache_path, newline="", encoding="utf-8") as f:
+            done = {row["drug_id"] for row in csv.DictReader(f)}
+    todo = [d for d in drug_ids if d not in done]
+    if not todo:
+        print(f"[fingerprints] PubChem cache already covers all {len(drug_ids)} drugs.")
+        return
+    new_file = not cache_path.exists()
+    with open(cache_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if new_file:
+            writer.writerow(["drug_id", "cid", "smiles", "status"])
+        for i, drug_id in enumerate(todo, 1):
+            request = urllib.request.Request(
+                PUBCHEM_URL.format(drug_id), headers={"User-Agent": "ddi-research-client"}
+            )
+            for attempt in range(4):
+                try:
+                    with urllib.request.urlopen(request, timeout=30) as response:
+                        props = json.load(response)["PropertyTable"]["Properties"][0]
+                    writer.writerow([drug_id, props["CID"], props.get("SMILES", ""), "ok"])
+                    break
+                except urllib.error.HTTPError as e:
+                    if e.code == 404:
+                        writer.writerow([drug_id, "", "", "not_found"])
+                        break
+                    time.sleep(2 ** attempt)
+                except (urllib.error.URLError, TimeoutError, KeyError, ValueError):
+                    time.sleep(2 ** attempt)
+            else:
+                writer.writerow([drug_id, "", "", "error"])
+            f.flush()
+            time.sleep(delay)  # PubChem allows at most 5 requests per second
+            if i % 200 == 0:
+                print(f"[fingerprints] PubChem: {i}/{len(todo)}", flush=True)
+
+
+def load_smiles_lookup(drug_ids=None, path=SMILES_SOURCE_PATH, cache_path=SMILES_CACHE_PATH,
+                        fetch=True):
+    """Return a {drug_id: smiles} mapping.
+
+    Tries, in order:
+      1. data/raw/drugbank_graph_nodes.csv (M1's build_graph.py output) --
+         currently all-empty smiles (confirmed against the real file: 0/1868
+         rows have a SMILES string; the Mendeley DDI_data.csv source M1
+         downloads from has no structure data), kept first in case that
+         changes.
+      2. data/raw/pubchem_smiles.csv cache, topped up via PubChem PUG REST
+         (xref RegistryID = DrugBank ID) for any drug_ids not yet cached,
+         when fetch=True and drug_ids is given.
+
+    Raises FileNotFoundError only if neither source has anything usable and
+    drug_ids wasn't given to fetch with.
+    """
+    lookup = _load_local_smiles_csv(path)
+
+    if drug_ids is not None and fetch:
+        missing = [d for d in drug_ids if d not in lookup]
+        if missing:
+            fetch_smiles_from_pubchem(missing, cache_path=cache_path)
+        lookup.update(_load_local_smiles_csv(cache_path))
+
+    if not lookup:
+        raise FileNotFoundError(
+            f"No usable SMILES found in {path} or {cache_path}, and no drug_ids "
+            "were given to fetch via PubChem. Call load_smiles_lookup(drug_ids=...) "
+            "with the graph's drug_id list, or ensure data/raw/pubchem_smiles.csv "
+            "already has entries."
+        )
+    return lookup
 
 
 def _extract_drug_ids(graph):
@@ -139,7 +245,7 @@ def extract_all_fingerprints(graph=None):
         graph = data_loading.load_graph()
     drug_ids = _extract_drug_ids(graph)
 
-    smiles_lookup = load_smiles_lookup()
+    smiles_lookup = load_smiles_lookup(drug_ids=drug_ids)
     drug_to_smiles = {drug_id: smiles_lookup.get(drug_id) for drug_id in drug_ids}
     fingerprints, failures = build_fingerprints(drug_to_smiles)
     return fingerprints, failures, drug_ids
