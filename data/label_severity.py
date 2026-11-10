@@ -45,7 +45,7 @@ MINOR = [
 
 def load_overrides(path=OVERRIDES):
     path = Path(path)
-    if not path.exists():
+    if not path.exists() or path.stat().st_size == 0:
         return {}
     df = pd.read_csv(path, dtype=str).fillna("")
     out = {}

@@ -18,6 +18,7 @@ models/checkpoints/
 *.pt
 *.ckpt
 *.pth
+!features/full_features.pt
 
 # Results that are large binary dumps (keep .json/.md summaries)
 results/*.pt
@@ -49,3 +50,12 @@ data/processed/**
 __pycache__/
 .pytest_cache/
 !data/processed/twosides_summary.json
+"data/raw/pubchem_smiles.csv"
+
+# Generated feature pipeline outputs
+# full_features.pt and mechanism_edges.csv are M2's documented Day 2 deliverables
+# (see features/README.md's file contract) -- they ARE committed, not ignored.
+# Only the PubChem fetch cache and the failure log (debug artifact) stay out.
+features/fingerprint_failures.log
+!features/full_features.pt
+!features/mechanism_edges.csv
