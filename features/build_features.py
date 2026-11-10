@@ -128,12 +128,12 @@ def main(argv=None):
 
     embedded_count = placeholder_count = 0
     try:
-        smiles_lookup = fingerprints.load_smiles_lookup()
+        smiles_lookup = fingerprints.load_smiles_lookup(drug_ids=drug_ids)
         drug_to_smiles = {drug_id: smiles_lookup.get(drug_id) for drug_id in drug_ids}
         feature_dict, embedded_count, placeholder_count = merge_embeddings(
             feature_dict, drug_to_smiles, use_embeddings=args.use_embeddings
         )
-    except NotImplementedError:
+    except (NotImplementedError, FileNotFoundError):
         print("[build_features] Skipping embedding merge: no drug_id -> SMILES source "
               "wired up yet (same gap noted in features/fingerprints.py).")
 
