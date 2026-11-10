@@ -353,6 +353,148 @@ HEADLINE_FIELDS = [
 ]
 
 
+@dataclass
+class DetectionResult:
+    """
+    Binary interaction-detection result - kept in a SEPARATE type from
+    EvalResult on purpose.
+
+    Detection ("do these two drugs interact at all?") and severity ("how badly?")
+    are different tasks on different label spaces, and mixing them in one table
+    is how a paper ends up comparing a 0.95 detection AUC against a 0.62 macro
+    F1 as if they measured the same thing. They get separate tables; the text
+    says which is which.
+    """
+
+    model_name: str
+    split: str
+    n_samples: int
+    n_positive: int
+
+    roc_auc: Optional[float]
+    average_precision: Optional[float]
+    f1: float
+    precision: float
+    recall: float
+    accuracy: float
+    threshold: float
+    notes: Dict[str, str] = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    def save(self, path: Union[str, Path]) -> Path:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.to_dict(), indent=2))
+        return path
+
+    @classmethod
+    def load(cls, path: Union[str, Path]) -> "DetectionResult":
+        return cls(**json.loads(Path(path).read_text()))
+
+
+def evaluate_detection(
+    y_true: ArrayLike,
+    y_score: ArrayLike,
+    threshold: float = 0.5,
+    model_name: str = "unnamed_model",
+    split: str = "test",
+    notes: Optional[Dict[str, str]] = None,
+) -> DetectionResult:
+    """
+    Score binary interaction detection (M3's Model 1 / the link-prediction task).
+
+    Parameters
+    ----------
+    y_true    : (N,) in {0, 1} - 1 means "these drugs interact"
+    y_score   : (N,) float probabilities, or (N,) hard 0/1 predictions
+    threshold : cut applied to probabilities to get hard labels
+
+    Pass the DETECTION labels here, not severity labels. To fold a detection
+    model into the severity comparison table instead, use `binary_to_severity()`
+    and `evaluate()` - and say in the paper how you mapped it.
+    """
+    from sklearn.metrics import average_precision_score
+
+    yt = np.asarray(y_true).astype(int).ravel()
+    ys = np.asarray(y_score, dtype=float).ravel()
+    if yt.size == 0:
+        raise ValueError("y_true is empty")
+    if yt.shape != ys.shape:
+        raise ValueError(f"shape mismatch: y_true {yt.shape} vs y_score {ys.shape}")
+    bad = set(np.unique(yt)) - {0, 1}
+    if bad:
+        raise ValueError(
+            f"detection labels must be 0/1, got {sorted(bad)}. If these are severity "
+            "labels, use evaluate() instead - detection and severity are separate tables."
+        )
+    if not np.all(np.isfinite(ys)):
+        raise ValueError("y_score contains NaN/inf")
+
+    is_prob = bool(ys.min() >= 0.0 and ys.max() <= 1.0 and not np.array_equal(np.unique(ys), np.array([0, 1])))
+    y_hat = (ys >= threshold).astype(int) if is_prob else ys.astype(int)
+
+    prec, rec, f1, _ = precision_recall_fscore_support(
+        yt, y_hat, labels=[1], average="binary", zero_division=0
+    )
+
+    roc = ap = None
+    if np.unique(yt).size == 2:
+        if is_prob:
+            roc = float(roc_auc_score(yt, ys))
+            ap = float(average_precision_score(yt, ys))
+    else:
+        notes = dict(notes or {})
+        notes["auc_skipped"] = "only one class present in y_true"
+
+    return DetectionResult(
+        model_name=model_name,
+        split=split,
+        n_samples=int(yt.size),
+        n_positive=int(yt.sum()),
+        roc_auc=roc,
+        average_precision=ap,
+        f1=float(f1),
+        precision=float(prec),
+        recall=float(rec),
+        accuracy=float(accuracy_score(yt, y_hat)),
+        threshold=float(threshold),
+        notes=dict(notes or {}),
+    )
+
+
+def detection_to_markdown(
+    results: Iterable["DetectionResult"],
+    title: str = "Binary interaction detection (separate task)",
+) -> str:
+    """
+    Detection table. Rendered apart from the severity table, with a line saying
+    why, so nobody reads across the two.
+    """
+    results = list(results)
+    if not results:
+        return f"## {title}\n\n_No results yet._\n"
+    lines = [
+        f"## {title}",
+        "",
+        "_Different task and label space from severity prediction: this answers "
+        '"do these drugs interact?", not "how severe?". Numbers here are not '
+        "comparable to the ordinal table above._",
+        "",
+        "| Model | Split | n | Positives | ROC-AUC | AP | Precision | Recall | F1 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for r in results:
+        auc = f"{r.roc_auc:.4f}" if r.roc_auc is not None else "n/a"
+        ap = f"{r.average_precision:.4f}" if r.average_precision is not None else "n/a"
+        lines.append(
+            f"| {r.model_name} | {r.split} | {r.n_samples} | {r.n_positive} | {auc} | {ap} | "
+            f"{r.precision:.4f} | {r.recall:.4f} | {r.f1:.4f} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def metrics_to_markdown(result: EvalResult) -> str:
     """Single-model markdown block for results/*.md."""
     lines = [
