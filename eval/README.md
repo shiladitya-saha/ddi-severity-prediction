@@ -90,6 +90,49 @@ save_figures(att, edge_index, mechanism_matrix=mech, labels=labels,
 **M4: the attention layers need `return_attention_weights=True`** (PyG GATConv /
 TransformerConv). Without it there is nothing to hook and `cap.merged()` raises.
 
+#### Mapping attention back to a mechanism_tag, per edge
+
+`mechanism_matrix` here is never `features/mechanism_edges.csv` itself --
+that file is a sparse per-pair table (`drug_a, drug_b, mechanism_tag,
+confidence`, zero or more rows per pair). The dense `(E, 4)` array this
+module expects is built by M4's bridge, already wired to the real file:
+
+```python
+from models.mechanism_gnn import load_mechanism_table, mechanism_matrix, MECHANISM_TAGS
+
+table = load_mechanism_table("features/mechanism_edges.csv", drug_ids)
+mech = mechanism_matrix(edge_index, table)   # (E, 4), row-aligned to edge_index
+```
+
+`models.mechanism_gnn.MECHANISM_TAGS` is `("cyp450_inhibition",
+"protein_binding_competition", "cns_depression", "qt_prolongation")` --
+lowercase, matching the CSV's `mechanism_tag` column exactly. This module's
+own `MECHANISM_TAGS` (`"CYP450_inhibition"`, ...) is a display-label variant
+in the *same order* -- the two never need to match by string equality
+because nothing here parses the CSV directly, but don't use this module's
+list to look up a raw `mechanism_tag` value.
+
+Once you have `att` (from `AttentionCapture`) and `mech` (from the bridge
+above), for one edge:
+
+```python
+from eval.attention_viz import edge_mechanism_breakdown
+
+edge_mechanism_breakdown(att, mech, edge_idx=42)
+# {"edge_idx": 42, "attention": 0.87,
+#  "mechanisms": [{"mechanism_tag": "QT_prolongation", "confidence": 0.9}]}
+# an edge mechanism_extraction.py tagged "unknown" (no category cleared its
+# confidence threshold) reports mechanisms=[{"mechanism_tag": "unknown", "confidence": 0.0}]
+# -- that is independent of how much attention the model paid to the edge.
+```
+
+Or get it attached to every row of the case-study table in one call:
+
+```python
+rows = top_k_attended_edges(att, edge_index, k=20, mechanism_matrix=mech)
+# each row now also has row["mechanisms"]
+```
+
 ### Severe-subset benchmark
 
 ```python
