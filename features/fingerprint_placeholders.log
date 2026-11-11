@@ -1,0 +1,2 @@
+# These drug_ids have a torch.zeros(FINGERPRINT_NBITS) placeholder in features/full_features.pt, not a real fingerprint -- they carry no signal from this feature. See fingerprint_failures.log for why each one failed.
+DB08913	missing SMILES

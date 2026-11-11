@@ -1,5 +1,5 @@
 description,severity,severity_name,rule,n_edges
-risk or severity of adverse effects,1,moderate,default:moderate,62707
+risk or severity of adverse effects,1,moderate,default:moderate,62710
 metabolism,0,minor,minor:metabolism,42552
 serum concentration,0,minor,minor:serum concentration,38918
 therapeutic efficacy,1,moderate,default:moderate,12786
@@ -18,7 +18,7 @@ orthostatic hypotensive activities,1,moderate,default:moderate,1514
 bradycardic activities,1,moderate,default:moderate,1452
 neuroexcitatory activities,1,moderate,default:moderate,1392
 excretion rate of higher serum level,0,minor,minor:excretion,1284
-cardiotoxic activities,2,major,major:cardiotox,1276
+cardiotoxic activities,2,major,major:cardiotox,1282
 serotonergic activities,2,major,major:serotonerg,1042
 antiplatelet activities,1,moderate,default:moderate,870
 bioavailability,0,minor,minor:bioavailab,830

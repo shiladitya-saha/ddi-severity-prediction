@@ -38,7 +38,7 @@ _CNS_DEPRESSION_STRONG = ("cns depress", "central nervous system depress", "resp
 _CNS_DEPRESSION_WEAK = ("sedation", "sedative", "drowsiness", "somnolence", "opioid", "benzodiazepine", "alcohol")
 
 _QT_PROLONGATION_STRONG = ("qt prolong", "qtc prolong", "qtc-prolong", "torsades")
-_QT_PROLONGATION_WEAK = ("arrhythmia", "cardiac conduction", "ventricular")
+_QT_PROLONGATION_WEAK = ("arrhythm", "cardiac conduction", "ventricular")
 
 
 def _match(raw_mechanism_tag, strong_keywords, weak_keywords):
