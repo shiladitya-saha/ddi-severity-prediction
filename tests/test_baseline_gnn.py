@@ -7,14 +7,17 @@ from pathlib import Path
 import torch
 from torch_geometric.data import Data
 
+from eval.split import load_splits, make_splits, save_splits
 from models.baseline_gnn import BinaryBaselineGNN
-from models.ordinal_gnn import OrdinalGNN
-from models.ordinal_loss import CoralLoss
 from models.train import (
     align_node_features,
     build_binary_edge_split,
+    build_m5_detection_split,
     load_checkpoint,
+    load_binary_inputs,
+    run_m5_detection_experiment,
     run_dry_run,
+    run_synthetic_dry_run,
     train_binary_model,
 )
 
@@ -161,6 +164,55 @@ class BinaryBaselineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             align_node_features(["missing"], {})
 
+    def test_loads_m1_day2_graph_using_companion_nodes_csv(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            ids = ["DB-B", "DB-A", "DB-C"]
+            (root / "nodes.csv").write_text(
+                "node_idx,drug_id\n0,DB-B\n1,DB-A\n2,DB-C\n", encoding="utf-8"
+            )
+            edges = torch.tensor([[0, 1, 1, 2], [1, 0, 2, 1]], dtype=torch.long)
+            torch.save({
+                "edge_index": edges,
+                "edge_severity": torch.tensor([2, 2, 0, 0]),
+                "num_nodes": 3,
+                "severity_names": ["minor", "moderate", "major"],
+            }, root / "graph.pt")
+            torch.save({
+                "DB-C": torch.tensor([30.0]),
+                "DB-A": torch.tensor([20.0]),
+                "DB-B": torch.tensor([10.0]),
+            }, root / "features.pt")
+            drug_ids, x, positives = load_binary_inputs(root / "graph.pt", root / "features.pt")
+        self.assertEqual(drug_ids, ids)
+        self.assertEqual(x[:, 0].tolist(), [10.0, 20.0, 30.0])
+        self.assertEqual({tuple(pair) for pair in positives.t().tolist()}, {(0, 1), (1, 2)})
+
+    def test_m1_adapter_rejects_bad_severity_alignment_and_ranges(self):
+        edges = torch.tensor([[0, 1], [1, 0]], dtype=torch.long)
+        with self.assertRaisesRegex(ValueError, "one value per edge"):
+            load_graph = {"edge_index": edges, "edge_severity": torch.tensor([1])}
+            from models.train import _validated_graph_edges
+            _validated_graph_edges(load_graph, edges, 2)
+        with self.assertRaisesRegex(ValueError, r"in \{0, 1, 2\}"):
+            from models.train import _validated_graph_edges
+            _validated_graph_edges(
+                {"edge_index": edges, "edge_severity": torch.tensor([3, 3])}, edges, 2
+            )
+
+    def test_synthetic_end_to_end_is_explicitly_labeled_and_finite(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = run_synthetic_dry_run(
+                epochs=2,
+                batch_size=32,
+                seed=13,
+                results_path=Path(temp_dir) / "synthetic.json",
+                device="cpu",
+            )
+            self.assertEqual(result["dataset_kind"], "synthetic_fixture")
+            self.assertTrue(torch.isfinite(torch.tensor(result["test_loss"])))
+            self.assertTrue(torch.isfinite(torch.tensor(result["best_validation_loss"])))
+
     def test_file_based_dry_run_writes_only_local_synthetic_artifacts(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -189,38 +241,107 @@ class BinaryBaselineTests(unittest.TestCase):
             self.assertTrue(results_path.exists())
             self.assertEqual(result["held_out_positive_edges_in_message_graph"], 0)
 
+    def test_m5_binary_split_keeps_positive_folds_and_negatives_disjoint(self):
+        labels = torch.tensor([index % 3 for index in range(self.pairs.size(1))])
+        m5 = make_splits(
+            self.pairs.t().numpy(), labels.numpy(), seed=13, severe_benchmark_frac=0.15
+        )
+        split, detection_splits = build_m5_detection_split(
+            self.pairs, self.x.size(0), m5, negative_ratio=1.0, seed=13
+        )
+        for name, source_indices, detection_indices in (
+            ("train", m5.train, split.train_indices),
+            ("val", m5.val, split.validation_indices),
+            ("test", m5.test, split.test_indices),
+            ("severe_benchmark", m5["severe_benchmark"], split.severe_indices),
+        ):
+            source_pairs = {
+                tuple(pair)
+                for pair in torch.as_tensor(m5.meta["canonical_pairs"])[source_indices].tolist()
+            }
+            candidates = split.pairs[:, detection_indices]
+            observed = {
+                tuple(pair)
+                for pair, label in zip(candidates.t().tolist(), split.labels[detection_indices].tolist())
+                if label == 1
+            }
+            self.assertEqual(observed, source_pairs, name)
+        self.assertEqual(detection_splits.strategy, "m5_positive_folds_with_partitioned_sampled_negatives")
+        self.assertEqual(split.message_edge_index.size(1), 2 * m5.train.size)
+        negative_pairs = {
+            tuple(sorted(pair))
+            for pair, label in zip(split.pairs.t().tolist(), split.labels.tolist())
+            if label == 0
+        }
+        self.assertEqual(len(negative_pairs), int((split.labels == 0).sum()))
+        held = set()
+        for index in (split.validation_indices, split.test_indices, split.severe_indices):
+            held.update(tuple(sorted(pair)) for pair in split.pairs[:, index].t().tolist())
+        context = {tuple(sorted(pair)) for pair in split.message_edge_index.t().tolist()}
+        self.assertFalse(context & held)
 
-class OrdinalGNNTests(unittest.TestCase):
-    def test_model_2_uses_m4_coral_interface(self):
-        torch.manual_seed(7)
-        x = torch.randn(10, 12)
-        edges = torch.tensor([[0, 1, 1, 2, 2, 3], [1, 0, 2, 1, 3, 2]])
-        pairs = torch.tensor([[0, 1, 4], [2, 3, 5]])
-        labels = torch.tensor([0, 1, 2])
-        model = OrdinalGNN(12, hidden_dim=8, dropout=0.0)
-        logits = model(x, edges, pairs)
-        self.assertEqual(tuple(logits.shape), (3, 2))
-        probabilities = model.probabilities(logits)
-        self.assertEqual(tuple(probabilities.shape), (3, 3))
-        self.assertTrue(torch.isfinite(probabilities).all())
-        self.assertTrue(torch.allclose(probabilities.sum(dim=1), torch.ones(3)))
-        # CORAL decoding counts passed thresholds (ordinal median), which need
-        # not equal the maximum-probability class for every probability shape.
-        self.assertEqual(model.predict(logits).tolist(), (logits > 0).sum(dim=1).tolist())
-        loss = CoralLoss()(logits, labels)
-        self.assertTrue(torch.isfinite(loss))
-        loss.backward()
-        self.assertTrue(all(parameter.grad is not None for parameter in model.parameters()))
+    def test_m5_detection_runner_exports_predictions_and_scores_via_m5(self):
+        labels = torch.tensor([index % 3 for index in range(self.pairs.size(1))])
+        m5 = make_splits(
+            self.pairs.t().numpy(), labels.numpy(), seed=19, severe_benchmark_frac=0.15
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            graph = root / "graph.pt"
+            features = root / "features.pt"
+            split_path = save_splits(m5, root / "severity_splits.json")
+            node_ids = [f"SYN-{index}" for index in range(self.x.size(0))]
+            directed_pairs = torch.cat((self.pairs, self.pairs.flip(0)), dim=1)
+            directed_labels = torch.cat((labels, labels))
+            torch.save(
+                {
+                    "drug_id": node_ids,
+                    "edge_index": directed_pairs,
+                    "edge_severity": directed_labels,
+                    "num_nodes": len(node_ids),
+                },
+                graph,
+            )
+            torch.save(
+                {drug_id: self.x[index] for index, drug_id in enumerate(node_ids)}, features
+            )
+            results = run_m5_detection_experiment(
+                graph,
+                features,
+                split_path,
+                epochs=1,
+                batch_size=32,
+                seed=19,
+                checkpoint_path=root / "model.pt",
+                results_path=root / "model1_results.json",
+                predictions_path=root / "preds_detection_baseline.npz",
+                detection_splits_path=root / "detection_splits.json",
+                device="cpu",
+                dataset_kind="synthetic_fixture",
+            )
+            self.assertEqual(results["dataset_kind"], "synthetic_fixture")
+            self.assertTrue((root / "model1_results.json").is_file())
+            self.assertTrue((root / "model.pt").is_file())
+            detection = load_splits(root / "detection_splits.json")
+            with __import__("numpy").load(root / "preds_detection_baseline.npz") as values:
+                self.assertEqual(str(values["task"]), "detection")
+                self.assertEqual(values["y_true_bin"].shape, values["y_score"].shape)
+                self.assertTrue(set(values["edge_idx"].tolist()).issubset(
+                    set(detection.val.tolist()) | set(detection.test.tolist())
+                ))
+            from scripts.run_eval import main as run_eval_main
 
-    def test_ordinal_pair_predictions_are_symmetric(self):
-        torch.manual_seed(8)
-        model = OrdinalGNN(12, hidden_dim=8, dropout=0.0).eval()
-        x = torch.randn(10, 12)
-        edges = torch.tensor([[0, 1, 1, 2, 2, 3], [1, 0, 2, 1, 3, 2]])
-        pairs = torch.tensor([[0, 4], [2, 5]])
-        self.assertTrue(torch.allclose(
-            model(x, edges, pairs), model(x, edges, pairs.flip(0)), atol=1e-6
-        ))
+            code = run_eval_main(
+                [
+                    "--preds", str(root / "preds_detection_baseline.npz"),
+                    "--results-dir", str(root),
+                    "--splits", str(root / "detection_splits.json"),
+                    "--out", str(root / "detection_comparison.md"),
+                ]
+            )
+            self.assertEqual(code, 0)
+            comparison = (root / "detection_comparison.md").read_text(encoding="utf-8")
+            self.assertIn("Binary interaction detection", comparison)
 
 
 if __name__ == "__main__":

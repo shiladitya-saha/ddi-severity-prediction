@@ -3,11 +3,18 @@
     python -m unittest tests/test_mechanism_model.py -v
 """
 
+import os
+import tempfile
 import unittest
 
 import torch
 
-from models.mechanism_gnn import MECHANISM_TAGS, MechanismOrdinalGNN
+from models.mechanism_gnn import (
+    MECHANISM_TAGS,
+    MechanismOrdinalGNN,
+    load_mechanism_table,
+    mechanism_matrix,
+)
 from models.ordinal_loss import (
     CoralHead,
     CoralLoss,
@@ -119,10 +126,80 @@ class MechanismGNNTests(unittest.TestCase):
     def test_attention_returned_for_every_layer(self):
         _, attention = self.model(*self.graph, return_attention=True)
         self.assertEqual(len(attention), 2)
+        for returned_edges, alpha in attention:
+            # One row per input edge, in input order, so M5 can line attention
+            # up with the (E, 4) mechanism matrix. 8 directed edges, 2 heads.
+            self.assertTrue(torch.equal(returned_edges, self.graph[1]))
+            self.assertEqual(alpha.shape, (8, 2))
+
+    def test_attention_sums_to_one_over_each_drugs_incoming_edges(self):
+        _, attention = self.model(*self.graph, return_attention=True)
         edge_index, alpha = attention[0]
-        # 8 directed edges + 6 self-loops, 2 heads.
-        self.assertEqual(edge_index.shape, (2, 14))
-        self.assertEqual(alpha.shape, (14, 2))
+        totals = torch.zeros(6, 2).index_add_(0, edge_index[1], alpha)
+        receiving = edge_index[1].unique()
+        self.assertTrue(torch.allclose(totals[receiving], torch.ones(len(receiving), 2)))
+
+    def test_encode_runs_without_any_pairs(self):
+        x, edge_index, edge_attr, _, _ = self.graph
+        h, attention = self.model.encode(x, edge_index, edge_attr)
+        self.assertEqual(h.shape, (6, 16))
+        self.assertEqual(len(attention), 2)
+
+    def test_missing_pair_attr_means_all_zeros(self):
+        x, edge_index, edge_attr, pair_index, _ = self.graph
+        without = self.model(x, edge_index, edge_attr, pair_index)
+        zeros = self.model(x, edge_index, edge_attr, pair_index, torch.zeros(4, NUM_TAGS))
+        self.assertTrue(torch.equal(without, zeros))
+
+    def test_bad_inputs_rejected(self):
+        x, edge_index, edge_attr, pair_index, pair_attr = self.graph
+        cases = {
+            "edge_attr row count": (x, edge_index, edge_attr[:-1], pair_index, pair_attr),
+            "pair_attr row count": (x, edge_index, edge_attr, pair_index, pair_attr[:-1]),
+            "pair_attr width": (x, edge_index, edge_attr, pair_index, pair_attr[:, :-1]),
+            "negative pair index": (x, edge_index, edge_attr, pair_index - 1, pair_attr),
+            "pair index too large": (x, edge_index, edge_attr, pair_index + 6, pair_attr),
+            "edge index too large": (x, edge_index + 6, edge_attr, pair_index, pair_attr),
+            "pair index wrong shape": (x, edge_index, edge_attr, pair_index.t(), pair_attr),
+        }
+        for name, args in cases.items():
+            with self.subTest(name), self.assertRaises(ValueError):
+                self.model(*args)
+
+    def test_config_rebuilds_an_identical_model(self):
+        rebuilt = MechanismOrdinalGNN(**self.model.config).eval()
+        rebuilt.load_state_dict(self.model.state_dict())
+        self.assertTrue(torch.equal(rebuilt(*self.graph), self.model(*self.graph)))
+
+    def test_learns_severity_from_mechanism_on_held_out_pairs(self):
+        # Every drug has the same fingerprint and severity depends only on the
+        # mechanism features, so held-out accuracy requires those features to
+        # reach the output. Random fingerprints would let a model this size
+        # memorise individual drugs on so few pairs. Message passing uses
+        # training pairs only.
+        torch.manual_seed(0)
+        x = torch.ones(40, 16)
+        low = torch.randint(0, 20, (300,))
+        pairs = torch.stack([low, low + torch.randint(1, 20, (300,))])
+        attr = (torch.rand(300, NUM_TAGS) > 0.5).float() * 0.9
+        labels = (attr[:, 0] > 0).long() + (attr[:, 3] > 0).long()
+        train, test = torch.arange(240), torch.arange(240, 300)
+        edge_index = torch.cat([pairs[:, train], pairs[:, train].flip(0)], dim=1)
+        edge_attr = attr[train].repeat(2, 1)
+
+        model = MechanismOrdinalGNN(16, hidden_dim=16, heads=2, dropout=0.0)
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+        loss_fn = CoralLoss()
+        for _ in range(200):
+            optimizer.zero_grad()
+            logits = model(x, edge_index, edge_attr, pairs[:, train], attr[train])
+            loss_fn(logits, labels[train]).backward()
+            optimizer.step()
+
+        model.eval()
+        logits = model(x, edge_index, edge_attr, pairs[:, test], attr[test])
+        accuracy = (coral_predict(logits) == labels[test]).float().mean().item()
+        self.assertGreater(accuracy, 0.85)
 
     def test_every_parameter_receives_a_gradient(self):
         self.model.train()
@@ -142,6 +219,78 @@ class MechanismGNNTests(unittest.TestCase):
             optimizer.step()
         model.eval()
         self.assertEqual(coral_predict(model(*self.graph)).tolist(), labels.tolist())
+
+
+HEADER = "drug_a,drug_b,mechanism_tag,confidence\n"
+DRUG_IDS = ["DB01", "DB02", "DB03", "DB04"]
+
+
+class MechanismFeatureTests(unittest.TestCase):
+    def load(self, body):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "mechanism_edges.csv")
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                f.write(HEADER + body)
+            return load_mechanism_table(path, DRUG_IDS)
+
+    def test_both_directions_get_the_same_features(self):
+        table = self.load("DB02,DB01,qt_prolongation,0.9\n")
+        rows = mechanism_matrix(torch.tensor([[0, 1], [1, 0]]), table)
+        self.assertTrue(torch.equal(rows[0], rows[1]))
+        self.assertAlmostEqual(rows[0, MECHANISM_TAGS.index("qt_prolongation")].item(), 0.9, 5)
+
+    def test_rows_follow_input_order_and_tag_columns(self):
+        table = self.load(
+            "DB01,DB02,cyp450_inhibition,0.9\n"
+            "DB01,DB02,cns_depression,0.55\n"
+            "DB03,DB04,protein_binding_competition,0.55\n"
+        )
+        rows = mechanism_matrix(torch.tensor([[2, 0], [3, 1]]), table)
+        expected = torch.tensor([[0.0, 0.55, 0.0, 0.0], [0.9, 0.0, 0.55, 0.0]])
+        self.assertTrue(torch.allclose(rows, expected))
+
+    def test_unknown_tag_and_absent_pair_are_all_zeros(self):
+        table = self.load("DB01,DB02,unknown,0.0\n")
+        rows = mechanism_matrix(torch.tensor([[0, 2], [1, 3]]), table)
+        self.assertTrue(torch.equal(rows, torch.zeros(2, NUM_TAGS)))
+
+    def test_repeated_rows_keep_highest_confidence(self):
+        table = self.load(
+            "DB01,DB02,qt_prolongation,0.55\n"
+            "DB02,DB01,qt_prolongation,0.9\n"
+            "DB01,DB02,qt_prolongation,0.55\n"
+        )
+        rows = mechanism_matrix(torch.tensor([[0], [1]]), table)
+        self.assertAlmostEqual(rows[0, MECHANISM_TAGS.index("qt_prolongation")].item(), 0.9, 5)
+
+    def test_bad_rows_rejected(self):
+        for body in (
+            "DB01,DB02,QT_prolongation,0.9\n",  # wrong tag spelling
+            "DB01,DB99,qt_prolongation,0.9\n",  # drug not in graph
+            "DB01,DB02,qt_prolongation,1.5\n",  # confidence out of range
+            "DB01,DB02,qt_prolongation,nan\n",
+        ):
+            with self.subTest(body), self.assertRaises(ValueError):
+                self.load(body)
+
+    def test_empty_pair_list_keeps_feature_width(self):
+        rows = mechanism_matrix(torch.empty((2, 0), dtype=torch.long), {})
+        self.assertEqual(rows.shape, (0, NUM_TAGS))
+
+    def test_csv_features_flow_through_the_model(self):
+        torch.manual_seed(0)
+        table = self.load("DB01,DB02,qt_prolongation,0.9\nDB02,DB03,cns_depression,0.55\n")
+        edge_index = torch.tensor([[0, 1, 1, 2], [1, 0, 2, 1]])
+        pair_index = torch.tensor([[0, 2], [2, 3]])
+        model = MechanismOrdinalGNN(8, hidden_dim=16, heads=2).eval()
+        logits = model(
+            torch.randn(4, 8),
+            edge_index,
+            mechanism_matrix(edge_index, table),
+            pair_index,
+            mechanism_matrix(pair_index, table),
+        )
+        self.assertEqual(logits.shape, (2, 2))
 
 
 if __name__ == "__main__":
