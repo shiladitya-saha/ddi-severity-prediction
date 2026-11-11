@@ -8,11 +8,12 @@ runs sanity checks:
      models/train.py loads when graph.pt has no drug_id field -- see
      models/train.py's _load_node_ids) has a corresponding entry in
      full_features.pt. Reports the exact count of any gap.
-  2. No NaN, empty, or all-zero fingerprint vectors in full_features.pt
-     (all-zero is distinct from an intentional zero-padded embedding tail --
-     see build_features.merge_embeddings -- this flags a vector that is
-     zero in EVERY dimension, which means fingerprinting itself produced
-     nothing usable).
+  2. No NaN, empty, or unexpected all-zero fingerprint vectors in
+     full_features.pt. A drug_id listed in features/fingerprint_placeholders.log
+     (no usable SMILES -- see fingerprints.build_fingerprints) is expected to
+     be entirely zero and is excused; an all-zero vector for any OTHER
+     drug_id means fingerprinting silently produced nothing usable without
+     going through the placeholder path, and is still flagged as a bug.
   3. mechanism_edges.csv's edge coverage is consistent with
      data_loading.load_graph()'s edge count: every graph edge must produce
      at least one row (classify_edge() always returns >=1 row per edge --
@@ -69,14 +70,17 @@ def check_full_coverage(canonical_ids, feature_dict):
     return len(issues) == 0, issues, len(missing)
 
 
-def check_vector_sanity(feature_dict):
-    """Flag drug_ids whose fingerprint vector is empty, NaN/Inf, or all-zero.
+def check_vector_sanity(feature_dict, known_placeholder_ids=frozenset()):
+    """Flag drug_ids whose fingerprint vector is empty, NaN/Inf, or unexpectedly all-zero.
 
-    An all-zero vector is flagged even though a zero-padded ChemBERTa tail is
-    intentional for some drugs (see merge_embeddings) -- that padding only
-    ever covers part of the vector; the fingerprint half should never be
-    entirely zero, so a fully-zero vector means fingerprinting failed
-    silently rather than raising.
+    An all-zero vector is expected (not flagged) for drug_ids in
+    known_placeholder_ids -- fingerprints.build_fingerprints() deliberately
+    zero-pads a drug with no usable SMILES (see features/fingerprint_placeholders.log),
+    and its ChemBERTa embedding then also fails for the same reason, so its
+    full vector is legitimately all-zero. For every other drug_id, an
+    all-zero vector is NOT expected and means fingerprinting silently
+    produced nothing usable without going through the placeholder path --
+    still flagged as a bug.
 
     Returns (passed: bool, issues: list[str]).
     """
@@ -89,8 +93,8 @@ def check_vector_sanity(feature_dict):
             issues.append(f"{drug_id}: contains NaN")
         if torch.isinf(vec).any():
             issues.append(f"{drug_id}: contains Inf")
-        if torch.all(vec == 0):
-            issues.append(f"{drug_id}: vector is all-zero")
+        if torch.all(vec == 0) and drug_id not in known_placeholder_ids:
+            issues.append(f"{drug_id}: vector is all-zero and not a known placeholder")
     return len(issues) == 0, issues
 
 
@@ -221,10 +225,20 @@ def main():
         print("[SKIP] Full node coverage in full_features.pt (nodes.csv or full_features.pt not loaded)")
 
     if feature_dict is not None:
-        passed, issues = check_vector_sanity(feature_dict)
-        _report("No NaN/empty/all-zero fingerprint vectors", passed, issues)
+        placeholder_path = Path("features/fingerprint_placeholders.log")
+        known_placeholder_ids = set()
+        if placeholder_path.exists():
+            with open(placeholder_path, encoding="utf-8") as f:
+                known_placeholder_ids = {
+                    line.split("\t", 1)[0] for line in f if line.strip() and not line.startswith("#")
+                }
+        passed, issues = check_vector_sanity(feature_dict, known_placeholder_ids)
+        label = "No NaN/empty/unexpected all-zero fingerprint vectors"
+        if known_placeholder_ids:
+            label += f" ({len(known_placeholder_ids)} known placeholder(s) excused)"
+        _report(label, passed, issues)
     else:
-        print("[SKIP] No NaN/empty/all-zero fingerprint vectors (full_features.pt not loaded)")
+        print("[SKIP] No NaN/empty/unexpected all-zero fingerprint vectors (full_features.pt not loaded)")
 
     if mech_rows is not None:
         try:
