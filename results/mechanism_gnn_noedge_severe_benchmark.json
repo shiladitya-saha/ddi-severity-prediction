@@ -1,0 +1,63 @@
+{
+  "model_name": "mechanism_gnn_noedge",
+  "split": "severe_benchmark",
+  "n_samples": 2282,
+  "macro_f1": 0.3223957154710719,
+  "mae": 0.0915863277826468,
+  "major_recall": 0.9364592462751972,
+  "qwk": 0.0,
+  "micro_f1": 0.9364592462751972,
+  "weighted_f1": 0.9671871464132157,
+  "accuracy": 0.9364592462751972,
+  "balanced_accuracy": 0.9364592462751972,
+  "within_one_accuracy": 0.971954425942156,
+  "rmse": 0.3842882718719566,
+  "per_class": {
+    "MINOR": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 0
+    },
+    "MODERATE": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 0
+    },
+    "MAJOR": {
+      "precision": 1.0,
+      "recall": 0.9364592462751972,
+      "f1": 0.9671871464132157,
+      "support": 2282
+    }
+  },
+  "confusion": [
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      64,
+      81,
+      2137
+    ]
+  ],
+  "support": {
+    "MINOR": 0,
+    "MODERATE": 0,
+    "MAJOR": 2282
+  },
+  "macro_auc": null,
+  "major_auc": null,
+  "major_ap": null,
+  "notes": {
+    "auc_skipped": "only one class present in y_true"
+  }
+}
