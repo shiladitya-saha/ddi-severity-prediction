@@ -1,0 +1,63 @@
+{
+  "model_name": "ordinal_gnn",
+  "split": "severe_benchmark",
+  "n_samples": 2282,
+  "macro_f1": 0.30633191220590555,
+  "mae": 0.175284837861525,
+  "major_recall": 0.8501314636283961,
+  "qwk": 0.0,
+  "micro_f1": 0.8501314636283961,
+  "weighted_f1": 0.9189957366177166,
+  "accuracy": 0.8501314636283961,
+  "balanced_accuracy": 0.8501314636283961,
+  "within_one_accuracy": 0.9745836985100789,
+  "rmse": 0.475518076250911,
+  "per_class": {
+    "MINOR": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 0
+    },
+    "MODERATE": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 0
+    },
+    "MAJOR": {
+      "precision": 1.0,
+      "recall": 0.8501314636283961,
+      "f1": 0.9189957366177167,
+      "support": 2282
+    }
+  },
+  "confusion": [
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      58,
+      284,
+      1940
+    ]
+  ],
+  "support": {
+    "MINOR": 0,
+    "MODERATE": 0,
+    "MAJOR": 2282
+  },
+  "macro_auc": null,
+  "major_auc": null,
+  "major_ap": null,
+  "notes": {
+    "auc_skipped": "only one class present in y_true"
+  }
+}
