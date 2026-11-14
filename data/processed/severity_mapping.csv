@@ -78,63 +78,63 @@ serum concentration || therapeutic efficacy,1,moderate,default:moderate,19
 risk or severity of renal failure and hyperkalemia,2,major,major:hyperkal,18
 risk or severity of myopathy and rhabdomyolysis,2,major,major:rhabdomyolysis,17
 risk or severity of ventricular arrhythmias,2,major,major:arrhythm,16
-risk or severity of hypertension,1,moderate,default:moderate,15
-hypotensive and central nervous system depressant (CNS depressant) activities,1,moderate,default:moderate,15
-dermatologic adverse activities,1,moderate,default:moderate,15
 central neurotoxic activities,2,major,major:neurotox,15
+dermatologic adverse activities,1,moderate,default:moderate,15
 risk or severity of convulsion,2,major,major:convuls,15
+hypotensive and central nervous system depressant (CNS depressant) activities,1,moderate,default:moderate,15
+risk or severity of hypertension,1,moderate,default:moderate,15
 "hypotensive, nephrotoxic, and hyperkalemic activities",2,major,major:hyperkal,14
-"risk or severity of hypotension, nitritoid reactions, facial flushing, nausea, and vomiting",1,moderate,default:moderate,14
 risk or severity of anemia and severe leukopenia,1,moderate,default:moderate,14
+"risk or severity of hypotension, nitritoid reactions, facial flushing, nausea, and vomiting",1,moderate,default:moderate,14
 risk or severity of hyponatremia,1,moderate,default:moderate,13
-risk or severity of severe leukopenia,1,moderate,default:moderate,13
 risk or severity of serotonin syndrome,2,major,major:serotonin,13
-serum concentration || excretion,0,minor,minor:serum concentration,12
+risk or severity of severe leukopenia,1,moderate,default:moderate,13
 ototoxic activities,2,major,major:ototox,12
-photosensitizing activities,1,moderate,default:moderate,11
-risk or severity of adverse effects || metabolism,1,moderate,default:moderate,11
+serum concentration || excretion,0,minor,minor:serum concentration,12
 protein binding,0,minor,minor:protein binding,11
+risk or severity of adverse effects || metabolism,1,moderate,default:moderate,11
+photosensitizing activities,1,moderate,default:moderate,11
 risk or severity of hypokalemia,1,moderate,default:moderate,10
 risk or severity of ototoxicity and nephrotoxicity,2,major,major:nephrotox,10
 risk or severity of adverse effects || QTc-prolonging activities,2,major,major:qtc,9
 risk or severity of adverse effects || excretion,1,moderate,default:moderate,8
 "risk or severity of myopathy, rhabdomyolysis, and myoglobinuria",2,major,major:rhabdomyolysis,8
-risk or severity of adverse effects || serum concentration,1,moderate,default:moderate,7
 risk or severity of myopathy,2,major,major:myopathy,7
 "risk or severity of rhabdomyolysis, myoglobinuria, and elevated creatine kinase (CPK)",2,major,major:rhabdomyolysis,7
+risk or severity of adverse effects || serum concentration,1,moderate,default:moderate,7
 serotonergic activities || risk or severity of adverse effects,2,major,major:serotonerg,7
 serum concentration || risk or severity of adverse effects,1,moderate,default:moderate,6
 risk or severity of adverse effects || central nervous system depressant (CNS depressant) activities,1,moderate,default:moderate,6
 "risk or severity of QTc prolongation, torsade de pointes, hypokalemia, hypomagnesemia, and cardiac arrest",2,major,major:qtc,5
-neurotoxic activities,2,major,major:neurotox,4
 risk or severity of bradycardia,1,moderate,default:moderate,4
-serum concentration || cardiotoxic activities,2,major,major:cardiotox,3
+neurotoxic activities,2,major,major:neurotox,4
 serum concentration || risk or severity of hypotension,1,moderate,default:moderate,3
-hyperkalemic activities || metabolism,2,major,major:hyperkal,2
-serum concentration || QTc-prolonging activities,2,major,major:qtc,2
+serum concentration || cardiotoxic activities,2,major,major:cardiotox,3
 risk or severity of renal failure,1,moderate,default:moderate,2
+neutropenic activities,2,major,major:neutropen,2
+serum concentration || QTc-prolonging activities,2,major,major:qtc,2
 risk or severity of adverse effects || therapeutic efficacy,1,moderate,default:moderate,2
+risk or severity of sedation,1,moderate,default:moderate,2
+excretion || serum concentration,0,minor,minor:excretion,2
+hyperkalemic activities || metabolism,2,major,major:hyperkal,2
 risk or severity of generalized seizure,2,major,major:seizure,2
 risk or severity,1,moderate,default:moderate,2
-excretion || serum concentration,0,minor,minor:excretion,2
-risk or severity of sedation,1,moderate,default:moderate,2
-neutropenic activities,2,major,major:neutropen,2
-antineoplastic activities,1,moderate,default:moderate,1
-hypertensive activities || metabolism,1,moderate,default:moderate,1
-cardiotoxic activities || excretion,2,major,major:cardiotox,1
-risk or severity of QTc prolongation and torsade de pointes,2,major,major:qtc,1
-hypotensive activities of at,1,moderate,default:moderate,1
-immunosuppressive activities || serum concentration,2,major,major:immunosuppress,1
-metabolism || risk or severity of adverse effects,1,moderate,default:moderate,1
-hypertensive activities || antihypertensive activities,1,moderate,default:moderate,1
-risk or severity of pulmonary toxicity,1,moderate,default:moderate,1
-risk or severity of intraocular pressure,1,moderate,default:moderate,1
-risk or severity of generalized seizure and bradycardia,2,major,major:seizure,1
-risk or severity of renal failure and rhabdomyolysis,2,major,major:rhabdomyolysis,1
-serum concentration || hepatotoxic activities,2,major,major:hepatotox,1
-risk or severity of sinus node depression,1,moderate,default:moderate,1
-serum concentration of sulfate,0,minor,minor:serum concentration,1
-serum concentration || immunosuppressive activities,2,major,major:immunosuppress,1
 serum concentration || neutropenic activities,2,major,major:neutropen,1
-thrombocytopenic activities,2,major,major:thrombo,1
+antineoplastic activities,1,moderate,default:moderate,1
 teratogenic activities,1,moderate,default:moderate,1
+cardiotoxic activities || excretion,2,major,major:cardiotox,1
+thrombocytopenic activities,2,major,major:thrombo,1
+immunosuppressive activities || serum concentration,2,major,major:immunosuppress,1
+serum concentration || immunosuppressive activities,2,major,major:immunosuppress,1
+serum concentration || hepatotoxic activities,2,major,major:hepatotox,1
+serum concentration of sulfate,0,minor,minor:serum concentration,1
+risk or severity of sinus node depression,1,moderate,default:moderate,1
+risk or severity of renal failure and rhabdomyolysis,2,major,major:rhabdomyolysis,1
+risk or severity of pulmonary toxicity,1,moderate,default:moderate,1
+metabolism || risk or severity of adverse effects,1,moderate,default:moderate,1
+risk or severity of generalized seizure and bradycardia,2,major,major:seizure,1
+risk or severity of QTc prolongation and torsade de pointes,2,major,major:qtc,1
+hypertensive activities || antihypertensive activities,1,moderate,default:moderate,1
+hypertensive activities || metabolism,1,moderate,default:moderate,1
+hypotensive activities of at,1,moderate,default:moderate,1
+risk or severity of intraocular pressure,1,moderate,default:moderate,1

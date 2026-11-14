@@ -1,0 +1,206 @@
+{
+  "model": "No-graph classical baseline (mlp)",
+  "tag": "baseline_mlp",
+  "config": {
+    "graph": "data/processed/graph.pt",
+    "features": "features/full_features.pt",
+    "splits": "eval/splits/ddi_v1.json",
+    "model": "mlp",
+    "tag": "baseline_mlp",
+    "seed": 42,
+    "results_dir": "results"
+  },
+  "feature_representation": "sum, |difference|, product of raw per-drug feature vectors (no message passing)",
+  "num_node_features": 1792,
+  "num_pair_features": 5376,
+  "results": {
+    "val": {
+      "model_name": "baseline_mlp",
+      "split": "val",
+      "n_samples": 32996,
+      "macro_f1": 0.9280714161478908,
+      "mae": 0.056279549036246816,
+      "major_recall": 0.8916967509025271,
+      "qwk": 0.8873474312712574,
+      "micro_f1": 0.95396411686265,
+      "weighted_f1": 0.954031103105078,
+      "accuracy": 0.95396411686265,
+      "balanced_accuracy": 0.933832367500687,
+      "within_one_accuracy": 0.9897563341011032,
+      "rmse": 0.27706836851946937,
+      "per_class": {
+        "MINOR": {
+          "precision": 0.9584553295877186,
+          "recall": 0.9373162049218388,
+          "f1": 0.9477679095426269,
+          "support": 12922
+        },
+        "MODERATE": {
+          "precision": 0.9627688612293919,
+          "recall": 0.9724841466776951,
+          "f1": 0.9676021177955175,
+          "support": 18135
+        },
+        "MAJOR": {
+          "precision": 0.8471337579617835,
+          "recall": 0.8916967509025271,
+          "f1": 0.8688442211055276,
+          "support": 1939
+        }
+      },
+      "confusion": [
+        [
+          12112,
+          607,
+          203
+        ],
+        [
+          390,
+          17636,
+          109
+        ],
+        [
+          135,
+          75,
+          1729
+        ]
+      ],
+      "support": {
+        "MINOR": 12922,
+        "MODERATE": 18135,
+        "MAJOR": 1939
+      },
+      "macro_auc": 0.993818744865563,
+      "major_auc": 0.9943235518487915,
+      "major_ap": 0.9438253648677722,
+      "notes": {}
+    },
+    "test": {
+      "model_name": "baseline_mlp",
+      "split": "test",
+      "n_samples": 33002,
+      "macro_f1": 0.9336829136705859,
+      "mae": 0.0532391976243864,
+      "major_recall": 0.8948995363214838,
+      "qwk": 0.8957150776874844,
+      "micro_f1": 0.9555481485970547,
+      "weighted_f1": 0.9555331013487258,
+      "accuracy": 0.9555481485970547,
+      "balanced_accuracy": 0.9359497804318266,
+      "within_one_accuracy": 0.9912126537785588,
+      "rmse": 0.2661087936676814,
+      "per_class": {
+        "MINOR": {
+          "precision": 0.9590047393364929,
+          "recall": 0.9394150417827298,
+          "f1": 0.949108818011257,
+          "support": 12924
+        },
+        "MODERATE": {
+          "precision": 0.9620246267843522,
+          "recall": 0.9735347631912664,
+          "f1": 0.9677454714861199,
+          "support": 18137
+        },
+        "MAJOR": {
+          "precision": 0.8737424547283702,
+          "recall": 0.8948995363214838,
+          "f1": 0.8841944515143803,
+          "support": 1941
+        }
+      },
+      "confusion": [
+        [
+          12141,
+          615,
+          168
+        ],
+        [
+          397,
+          17657,
+          83
+        ],
+        [
+          122,
+          82,
+          1737
+        ]
+      ],
+      "support": {
+        "MINOR": 12924,
+        "MODERATE": 18137,
+        "MAJOR": 1941
+      },
+      "macro_auc": 0.9938887876352772,
+      "major_auc": 0.9942954981423683,
+      "major_ap": 0.9513069240568964,
+      "notes": {}
+    },
+    "severe_benchmark": {
+      "model_name": "baseline_mlp",
+      "split": "severe_benchmark",
+      "n_samples": 2282,
+      "macro_f1": 0.3131148810907119,
+      "mae": 0.18930762489044697,
+      "major_recall": 0.8856266432953549,
+      "qwk": 0.0,
+      "micro_f1": 0.8856266432953549,
+      "weighted_f1": 0.9393446432721357,
+      "accuracy": 0.8856266432953549,
+      "balanced_accuracy": 0.8856266432953549,
+      "within_one_accuracy": 0.925065731814198,
+      "rmse": 0.5823883251422979,
+      "per_class": {
+        "MINOR": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 0
+        },
+        "MODERATE": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 0
+        },
+        "MAJOR": {
+          "precision": 1.0,
+          "recall": 0.8856266432953549,
+          "f1": 0.9393446432721357,
+          "support": 2282
+        }
+      },
+      "confusion": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          171,
+          90,
+          2021
+        ]
+      ],
+      "support": {
+        "MINOR": 0,
+        "MODERATE": 0,
+        "MAJOR": 2282
+      },
+      "macro_auc": null,
+      "major_auc": null,
+      "major_ap": null,
+      "notes": {
+        "partition": "held-out severe subset (MAJOR only)",
+        "never_trained_on": "true",
+        "headline_metric": "major_recall",
+        "auc_skipped": "only one class present in y_true"
+      }
+    }
+  }
+}

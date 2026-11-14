@@ -1,0 +1,46 @@
+C:\Users\KIIT0001\anaconda3\Lib\site-packages\pandas\core\computation\expressions.py:22: UserWarning: Pandas requires version '2.10.2' or newer of 'numexpr' (version '2.8.4' currently installed).
+  from pandas.core.computation.check import NUMEXPR_INSTALLED
+C:\Users\KIIT0001\anaconda3\Lib\site-packages\pandas\core\arrays\masked.py:56: UserWarning: Pandas requires version '1.4.2' or newer of 'bottleneck' (version '1.3.5' currently installed).
+  from pandas.core import (
+{
+  "thresholds": {
+    "min_prr": 2.0,
+    "min_count": 5,
+    "moderate_min_sig": 3,
+    "major_min_serious": 3
+  },
+  "raw_pairs": 211990,
+  "raw_pairs_with_signal": 135894,
+  "twosides_drugs": 1918,
+  "twosides_drugs_mapped": 1200,
+  "drug_mapping_methods": {
+    "name_exact": 1180,
+    "name_salt_stripped": 20
+  },
+  "pairs_both_drugs_mapped": 131763,
+  "validation_pairs": 89261,
+  "validation_in_drugbank_graph": 27184,
+  "validation_novel_pairs": 62077,
+  "twosides_severity_counts": {
+    "moderate": 36738,
+    "major": 32126,
+    "minor": 20397
+  },
+  "overlap_crosstab_drugbank_vs_twosides": {
+    "major": {
+      "major": 906,
+      "minor": 4639,
+      "moderate": 5496
+    },
+    "minor": {
+      "major": 374,
+      "minor": 2328,
+      "moderate": 2614
+    },
+    "moderate": {
+      "major": 793,
+      "minor": 4625,
+      "moderate": 5409
+    }
+  }
+}
