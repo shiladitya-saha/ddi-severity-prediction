@@ -104,3 +104,30 @@ Its mechanism channel order is CYP450 inhibition, protein-binding competition,
 CNS depression, and QT prolongation. M4 must ensure attributes derived from a
 held-out interaction description are not supplied for that target pair; the
 edge description is also an input to M1's heuristic severity labels.
+
+## Model 3: Mechanism-Aware Ordinal GNN (M4, Day 3)
+
+Results and caveats: `results/model3_day3_summary.md`.
+
+| File | Purpose |
+|---|---|
+| `mechanism_gnn.py` | GATv2 over drug fingerprints, mechanism tags as edge features, CORAL head |
+| `train_mechanism.py` | Trains and evaluates Model 3; writes `results/<tag>_results.json` + `_details.json` |
+| `few_shot.py` | New-drug experiment on M5's drug-disjoint split → `results/few_shot_results.json` |
+| `build_m4_inputs.py` | Builds fingerprints + mechanism edges as a stand-in while M2's pipeline was blocked (superseded now that `features/full_features.pt` and `features/mechanism_edges.csv` are real — pass those paths explicitly, see below) |
+
+```bash
+python -m models.train_mechanism --features features/full_features.pt \
+  --mechanism-edges features/mechanism_edges.csv --tag model3 --epochs 100 --patience 5
+python -m models.few_shot --features features/full_features.pt \
+  --mechanism-edges features/mechanism_edges.csv --epochs 100 --patience 5
+python -m unittest tests.test_train_mechanism tests.test_mechanism_model
+```
+
+Protocol (matches Model 2 so the comparison is fair): M5's `make_splits(seed=42)` (confirmed
+identical, row for row, to `eval/splits/ddi_v1.json`'s canonical pairs and indices); inverse-frequency
+class weights on the **training** labels; best validation macro F1 with early stopping (patience 5, cap
+100); test scored once. Message passing uses training edges only, with a training pair's own edge
+removed while that pair is scored. **The scored pair's own mechanism tags are not an input** — M1's
+labels and M2's tags are both keyword rules over the same interaction text, so those tags alone predict
+severity (74% vs 54% majority class); `--pair-mechanism` turns them on for the leak ablation only.
