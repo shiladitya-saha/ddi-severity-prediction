@@ -1,0 +1,63 @@
+{
+  "model_name": "baseline_rf",
+  "split": "severe_benchmark",
+  "n_samples": 2282,
+  "macro_f1": 0.19243557772236075,
+  "mae": 0.8698510078878177,
+  "major_recall": 0.4057843996494303,
+  "qwk": 0.0,
+  "micro_f1": 0.4057843996494303,
+  "weighted_f1": 0.5773067331670823,
+  "accuracy": 0.4057843996494303,
+  "balanced_accuracy": 0.4057843996494303,
+  "within_one_accuracy": 0.724364592462752,
+  "rmse": 1.1921081423102158,
+  "per_class": {
+    "MINOR": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 0
+    },
+    "MODERATE": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 0
+    },
+    "MAJOR": {
+      "precision": 1.0,
+      "recall": 0.4057843996494303,
+      "f1": 0.5773067331670823,
+      "support": 2282
+    }
+  },
+  "confusion": [
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      629,
+      727,
+      926
+    ]
+  ],
+  "support": {
+    "MINOR": 0,
+    "MODERATE": 0,
+    "MAJOR": 2282
+  },
+  "macro_auc": null,
+  "major_auc": null,
+  "major_ap": null,
+  "notes": {
+    "auc_skipped": "only one class present in y_true"
+  }
+}

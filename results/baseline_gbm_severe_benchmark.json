@@ -1,0 +1,63 @@
+{
+  "model_name": "baseline_gbm",
+  "split": "severe_benchmark",
+  "n_samples": 2282,
+  "macro_f1": 0.3061611374407583,
+  "mae": 0.24189307624890447,
+  "major_recall": 0.8492550394390885,
+  "qwk": 0.0,
+  "micro_f1": 0.8492550394390885,
+  "weighted_f1": 0.918483412322275,
+  "accuracy": 0.8492550394390885,
+  "balanced_accuracy": 0.8492550394390885,
+  "within_one_accuracy": 0.908851884312007,
+  "rmse": 0.6512981710590706,
+  "per_class": {
+    "MINOR": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 0
+    },
+    "MODERATE": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 0
+    },
+    "MAJOR": {
+      "precision": 1.0,
+      "recall": 0.8492550394390885,
+      "f1": 0.9184834123222749,
+      "support": 2282
+    }
+  },
+  "confusion": [
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      208,
+      136,
+      1938
+    ]
+  ],
+  "support": {
+    "MINOR": 0,
+    "MODERATE": 0,
+    "MAJOR": 2282
+  },
+  "macro_auc": null,
+  "major_auc": null,
+  "major_ap": null,
+  "notes": {
+    "auc_skipped": "only one class present in y_true"
+  }
+}
