@@ -1,65 +1,133 @@
-# models/ — Owners: M3 (baseline + ordinal), M4 (mechanism-aware + few-shot)
+# Models
 
-## Day 1
-- M3: `baseline_gnn.py` — binary GNN architecture using a reusable GCN node/pair encoder and symmetric drug-pair logits.
-- M4: `ordinal_loss.py` (OrdinalCrossEntropy / CORAL-style), `mechanism_gnn.py` skeleton
+M3 owns the binary interaction baseline and the ordinal severity model. M4 owns
+the mechanism-aware ordinal model, CORAL components, and few-shot experiments.
+M3 reuses M4's `CoralHead`, `CoralLoss`, and CORAL decoding helpers from
+`ordinal_loss.py`; it does not maintain a second CORAL implementation.
 
-## Day 2
-- M3: `train.py` — reproducible binary training, validation, metrics, checkpoint handling, and leakage-safe pair splitting; dry-run the baseline when M1/M2 artifacts are available.
-- M4: complete `mechanism_gnn.py` with edge features wired in, unit test on dummy data
-- Model 2 (`ordinal_gnn.py`) is deferred on this clean M3 submission branch because its current implementation depends on M4's `CoralHead`/`CoralLoss`, which are not yet present on `dev`.
+## Shared data and split contract
 
-## Binary baseline interface
+- `data/processed/graph.pt` contains `edge_index`, `edge_severity`, and
+  `num_nodes`. `data/processed/nodes.csv` defines the stable node-index to
+  `drug_id` mapping in row order, with `node_idx` contiguous from zero.
+- `features/full_features.pt` is a mapping from `drug_id` to one finite feature
+  vector. Both models align features to the graph node order and reject missing
+  IDs or inconsistent feature widths.
+- M5 generates `eval/splits/ddi_v1.json` once from
+  `data/processed/edges_labeled.csv`. Its canonical pair order and train/val/test
+  indices are shared by the ordinal model and by the positive examples in the
+  binary task. The `severe_benchmark` partition is never used for training or
+  checkpoint selection.
+- M1 labels are `0=minor`, `1=moderate`, `2=major`. These are severity classes;
+  they are not the binary interaction-detection labels.
 
-`BinaryBaselineGNN` accepts either explicit tensors or a PyG `Data` object:
+The graph context passed to either GNN contains training positives only, in
+both directions. Validation, test, and severe-benchmark target pairs are
+excluded from message passing. M3 Model 2 uses drug features and pair indices;
+it does not use target-edge descriptions or mechanism pair attributes.
 
-```python
-logits = model(x, message_edge_index, pair_index)
-# Or: logits = model(data, pair_index), where data.x and data.edge_index exist.
-```
+## Model 1: binary interaction detection
 
-`x` has shape `[num_drugs, num_node_features]`, `edge_index` has shape
-`[2, num_message_edges]`, and `pair_index` has shape `[2, num_pairs]`. The model
-returns one raw logit per pair with shape `[num_pairs]`; pass it to
-`BCEWithLogitsLoss` without applying sigmoid first. Pair features combine the
-sum, absolute difference, and element-wise product of node embeddings, so
-swapping pair order leaves the prediction unchanged.
-
-Run the real-data dry run from the repository root after M1 and M2 deliver
-their artifacts:
+`BinaryBaselineGNN` uses GCN node embeddings and a symmetric pair representation
+(sum, absolute difference, and element-wise product). It returns a raw logit
+per pair for `BCEWithLogitsLoss`. Positive examples follow the canonical M5
+folds. Uniform unordered non-edges are sampled once and assigned within those
+same folds at the selected negative ratio. Unobserved true interactions can
+still be sampled as false negatives.
 
 ```bash
 python -m models.train --graph data/processed/graph.pt \
-  --features features/full_features.pt --epochs 20 --seed 17
+  --features features/full_features.pt \
+  --splits eval/splits/ddi_v1.json --epochs 20 --seed 17
 ```
 
-The graph must provide `drug_id` in node order and `edge_index` for observed
-positive interactions. The feature bundle must be `{drug_id: feature_vector}`;
-features are stacked in graph ID order, with missing IDs or inconsistent
-widths rejected. The split canonicalizes undirected pairs and samples uniform
-unordered non-edges as approximate negatives. Validation and test positive
-targets are removed from message passing in both directions. Training
-positives remain in the training context, so training metrics are diagnostic;
-held-out validation/test metrics are reported separately.
-
-The default checkpoint is saved under `models/checkpoints/` (ignored by Git),
-and lightweight loss history and metrics go to
-`results/model1_dry_run.json`. No real-data run has been recorded on this
-branch because `data/processed/graph.pt` and `features/full_features.pt` are
-not available on `dev`.
-
-Run synthetic tests with:
+This writes `results/model1_results.json`,
+`results/preds_detection_baseline.npz`,
+`results/model1_detection_splits.json`, and
+`models/checkpoints/model1_binary_baseline.pt`. Detection is evaluated
+separately from ordinal severity:
 
 ```bash
-python -m unittest tests.test_baseline_gnn -v
+python scripts/run_eval.py \
+  --preds results/preds_detection_baseline.npz \
+  --splits results/model1_detection_splits.json
 ```
 
-## Day 3 (needs `data/processed/` + `features/full_features.pt`)
-- M3: run Model 1 and Model 2, then save `results/model1_results.json` and `results/model2_results.json` when Model 2's ordinal dependency is integrated.
-- M4: run Model 3 (mechanism-aware ordinal) + `few_shot.py` (MAML/contrastive for new-drug generalization) → `results/model3_results.json`
+The prediction file stores `edge_idx`, `y_true_bin`, `y_score`, and
+`task="detection"`. Do not map these binary scores to three-class severity
+metrics.
 
-## Day 4
-- Finalize result write-ups: `results/baseline_vs_ordinal.md` (M3), `results/mechanism_aware_final.md` + `results/few_shot_results.md` (M4)
+## Model 2: ordinal severity prediction
 
-Checkpoints saved to `models/checkpoints/` (gitignored — too large for git; document
-the download/regeneration path in each model's results file instead).
+`OrdinalGNN` reuses the binary model's graph encoder and symmetric pair
+representation, then applies M4's `CoralHead`. For three ordered severity
+classes it returns two cumulative logits with shape `[num_pairs, 2]`. Training
+uses M4's `CoralLoss`; `coral_logits_to_probs` converts logits to three class
+probabilities and `coral_predict` returns labels in `{0,1,2}`.
+
+```bash
+python -m models.ordinal_gnn --epochs 20 --seed 42
+python scripts/run_eval.py --preds results/preds_ordinal_gnn.npz
+```
+
+The real-data command writes `results/model2_results.json`,
+`results/preds_ordinal_gnn.npz`, and
+`models/checkpoints/model2_ordinal_gnn.pt`. The prediction file stores M5
+canonical `edge_idx` values, `y_true`, `y_pred`, and `y_proba` with three
+columns for validation, test, and the reserved severe benchmark. Checkpoints
+are selected by validation loss. Test and severe-benchmark labels do not affect
+training or checkpoint selection.
+
+## Synthetic checks
+
+Synthetic fixtures exercise model behavior and file interfaces. They do not
+represent DrugBank, M1 labels, or M2 molecular features, and their metrics must
+not be reported as real-data performance.
+
+```bash
+python -m models.train --synthetic --epochs 20 --seed 17 --device cpu
+python -m models.ordinal_gnn --synthetic --epochs 4 --seed 17 --device cpu
+python -m unittest tests.test_baseline_gnn tests.test_ordinal_gnn -v
+python -m unittest discover -s tests -v
+```
+
+Checkpoints are ignored under `models/checkpoints/`. Result JSON/NPZ files are
+small evaluation artifacts; datasets and large checkpoints should not be
+committed. Real-data runs require the local M1 graph, node table, labeled edge
+CSV, an M5 split artifact, and complete M2 feature coverage.
+
+## M4 model interface
+
+`MechanismOrdinalGNN` accepts node features, a message-passing `edge_index` and
+four-channel `edge_attr`, plus a separate `pair_index` and optional `pair_attr`.
+Its mechanism channel order is CYP450 inhibition, protein-binding competition,
+CNS depression, and QT prolongation. M4 must ensure attributes derived from a
+held-out interaction description are not supplied for that target pair; the
+edge description is also an input to M1's heuristic severity labels.
+
+## Model 3: Mechanism-Aware Ordinal GNN (M4, Day 3)
+
+Results and caveats: `results/model3_day3_summary.md`.
+
+| File | Purpose |
+|---|---|
+| `mechanism_gnn.py` | GATv2 over drug fingerprints, mechanism tags as edge features, CORAL head |
+| `train_mechanism.py` | Trains and evaluates Model 3; writes `results/<tag>_results.json` + `_details.json` |
+| `few_shot.py` | New-drug experiment on M5's drug-disjoint split → `results/few_shot_results.json` |
+| `build_m4_inputs.py` | Builds fingerprints + mechanism edges as a stand-in while M2's pipeline was blocked (superseded now that `features/full_features.pt` and `features/mechanism_edges.csv` are real — pass those paths explicitly, see below) |
+
+```bash
+python -m models.train_mechanism --features features/full_features.pt \
+  --mechanism-edges features/mechanism_edges.csv --tag model3 --epochs 100 --patience 5
+python -m models.few_shot --features features/full_features.pt \
+  --mechanism-edges features/mechanism_edges.csv --epochs 100 --patience 5
+python -m unittest tests.test_train_mechanism tests.test_mechanism_model
+```
+
+Protocol (matches Model 2 so the comparison is fair): M5's `make_splits(seed=42)` (confirmed
+identical, row for row, to `eval/splits/ddi_v1.json`'s canonical pairs and indices); inverse-frequency
+class weights on the **training** labels; best validation macro F1 with early stopping (patience 5, cap
+100); test scored once. Message passing uses training edges only, with a training pair's own edge
+removed while that pair is scored. **The scored pair's own mechanism tags are not an input** — M1's
+labels and M2's tags are both keyword rules over the same interaction text, so those tags alone predict
+severity (74% vs 54% majority class); `--pair-mechanism` turns them on for the leak ablation only.
