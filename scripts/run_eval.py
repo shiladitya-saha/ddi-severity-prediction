@@ -279,7 +279,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ))
         body.append("")
 
-    out.write_text("\n".join(body))
+    out.write_text("\n".join(body), encoding="utf-8")
     for r in severity_results:
         r.save(Path(args.results_dir) / f"{r.model_name}_{r.split}.json")
     for d in detection_results:
