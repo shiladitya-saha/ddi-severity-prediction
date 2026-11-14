@@ -23,7 +23,7 @@ Usage
     from eval.attention_viz import AttentionCapture, mechanism_attribution, save_figures
 
     with AttentionCapture(model) as cap:
-        logits = model(data.x, data.edge_index, data.edge_attr)
+        logits = model.encode(data.x, data.edge_index, data.edge_attr)
     att = cap.merged()                      # (E,) attention per edge
 
     attr = mechanism_attribution(att, mech_matrix, MECHANISM_TAGS)
@@ -259,10 +259,17 @@ def top_k_attended_edges(
     k: int = 20,
     drug_names: Optional[Dict[int, str]] = None,
     labels: Optional[ArrayLike] = None,
+    mechanism_matrix: Optional[ArrayLike] = None,
+    tags: Sequence[str] = MECHANISM_TAGS,
 ) -> List[Dict[str, object]]:
     """
     The k highest-attention edges, as rows ready for a markdown table or for
     literature validation on Day 4.
+
+    Pass `mechanism_matrix` (row-aligned to edge_index, see
+    edge_mechanism_breakdown()) to also attach each row's `mechanisms` list --
+    which mechanism_tag(s) M2 recorded for that specific edge and at what
+    confidence, not just the aggregate attribution across all edges.
     """
     a = np.asarray(att, dtype=float).ravel()
     ei = np.asarray(edge_index)
@@ -278,6 +285,14 @@ def top_k_attended_edges(
     names = drug_names or {}
     y = np.asarray(labels) if labels is not None else None
 
+    m = None
+    if mechanism_matrix is not None:
+        m = np.asarray(mechanism_matrix, dtype=float)
+        if m.ndim == 1:
+            m = m.reshape(-1, 1)
+        if m.shape[0] != a.size:
+            raise ValueError(f"mechanism_matrix has {m.shape[0]} rows but attention has {a.size}")
+
     rows: List[Dict[str, object]] = []
     for rank, i in enumerate(order, start=1):
         src, dst = int(ei[0, i]), int(ei[1, i])
@@ -292,8 +307,62 @@ def top_k_attended_edges(
             from .metrics import SEVERITY_LABELS
 
             row["severity"] = SEVERITY_LABELS.get(int(y[i]), str(y[i]))
+        if m is not None:
+            mechanisms = [
+                {"mechanism_tag": tag, "confidence": float(conf)}
+                for tag, conf in zip(tags, m[i])
+                if conf > 0.0
+            ]
+            row["mechanisms"] = mechanisms or [{"mechanism_tag": "unknown", "confidence": 0.0}]
         rows.append(row)
     return rows
+
+
+def edge_mechanism_breakdown(
+    att: ArrayLike,
+    mechanism_matrix: ArrayLike,
+    edge_idx: int,
+    tags: Sequence[str] = MECHANISM_TAGS,
+) -> Dict[str, object]:
+    """
+    For one edge (by its row position in edge_index / mechanism_matrix), return
+    the attention weight the model gave it alongside which mechanism_tag(s)
+    features/mechanism_edges.csv recorded for that edge and their confidence.
+
+    This is the per-prediction counterpart to mechanism_attribution(), which
+    only reports aggregate shares -- use this to answer "for THIS edge, which
+    mechanism did the model attend to, and how confident was M2's tagger in
+    it?" for a case-study figure or table row.
+
+    mechanism_matrix must already be row-aligned 1:1 with edge_index, in `tags`
+    column order -- i.e. models.mechanism_gnn.mechanism_matrix(edge_index, table),
+    built from load_mechanism_table("features/mechanism_edges.csv", drug_ids).
+    An edge whose row is all zero means mechanism_extraction.py tagged it
+    "unknown" (no mechanism cleared its confidence threshold for that raw
+    interaction description) -- that is independent of how much attention the
+    model paid to the edge, so a high-attention edge can still have no known
+    mechanism, and that is reported, not hidden.
+    """
+    a = np.asarray(att, dtype=float).ravel()
+    m = np.asarray(mechanism_matrix, dtype=float)
+    if m.ndim == 1:
+        m = m.reshape(-1, 1)
+    if m.shape[0] != a.size:
+        raise ValueError(f"mechanism_matrix has {m.shape[0]} rows but attention has {a.size}")
+    if not 0 <= edge_idx < a.size:
+        raise ValueError(f"edge_idx {edge_idx} out of range for {a.size} edges")
+
+    row = m[edge_idx]
+    mechanisms = [
+        {"mechanism_tag": tag, "confidence": float(conf)}
+        for tag, conf in zip(tags, row)
+        if conf > 0.0
+    ]
+    return {
+        "edge_idx": int(edge_idx),
+        "attention": float(a[edge_idx]),
+        "mechanisms": mechanisms or [{"mechanism_tag": "unknown", "confidence": 0.0}],
+    }
 
 
 def mechanism_attribution(
@@ -615,7 +684,10 @@ def save_figures(
     outdir.mkdir(parents=True, exist_ok=True)
     report = ExplainabilityReport()
 
-    rows = top_k_attended_edges(att, edge_index, k=top_k, drug_names=drug_names, labels=labels)
+    rows = top_k_attended_edges(
+        att, edge_index, k=top_k, drug_names=drug_names, labels=labels,
+        mechanism_matrix=mechanism_matrix, tags=tags,
+    )
     report.top_edges = rows
     report.figures.append(
         plot_top_edges(

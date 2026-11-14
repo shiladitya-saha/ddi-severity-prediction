@@ -610,5 +610,282 @@ class TestEndToEnd(unittest.TestCase):
             )
 
 
+class TestCanonicalPairs(unittest.TestCase):
+    def test_canonicalize_sorts_each_pair(self):
+        from eval.split import canonicalize_edges
+
+        out = canonicalize_edges(np.array([[5, 2], [1, 9], [7, 7]]))
+        np.testing.assert_array_equal(out, [[2, 5], [1, 9], [7, 7]])
+
+    def test_dedupe_removes_reversed_duplicates_and_self_loops(self):
+        from eval.split import dedupe_undirected
+
+        ei = np.array([[1, 2], [2, 1], [3, 3], [4, 5]])
+        y = np.array([MINOR, MINOR, MAJOR, MODERATE])
+        edges, labels, kept = dedupe_undirected(ei, y)
+        self.assertEqual(edges.shape[0], 2)  # (1,2) once, (4,5) once, no self-loop
+        np.testing.assert_array_equal(edges, [[1, 2], [4, 5]])
+        np.testing.assert_array_equal(labels, [MINOR, MODERATE])
+        self.assertEqual(kept.size, 2)
+
+    def test_dedupe_keeps_worst_severity_on_conflict(self):
+        from eval.split import dedupe_undirected
+
+        ei = np.array([[1, 2], [2, 1]])
+        y = np.array([MINOR, MAJOR])
+        _, labels, _ = dedupe_undirected(ei, y, keep="max")
+        np.testing.assert_array_equal(labels, [MAJOR])
+        _, labels_first, _ = dedupe_undirected(ei, y, keep="first")
+        np.testing.assert_array_equal(labels_first, [MINOR])
+
+    def test_deduped_graph_passes_leakage_check(self):
+        from eval.split import dedupe_undirected
+
+        data = make_dummy_graph(n_drugs=80, n_edges=600, seed=41)
+        flipped = data.edge_index[::-1]  # add every edge in reverse too
+        doubled = np.concatenate([data.edge_index, flipped], axis=1)
+        doubled_labels = np.concatenate([data.labels, data.labels])
+
+        edges, labels, _ = dedupe_undirected(doubled, doubled_labels)
+        self.assertEqual(edges.shape[0], data.n_edges)
+        splits = make_splits(edges, labels, seed=4)
+        self.assertEqual(
+            verify_splits(splits, labels=labels, edge_index=edges, strict=False), []
+        )
+
+
+class TestBidirectionalLeak(unittest.TestCase):
+    """
+    Regression tests for the audit finding: a row-wise split on a graph that
+    stores both (a,b) and (b,a) puts ~70% of test pairs' mirrors into train.
+    """
+
+    def setUp(self):
+        from eval.split import both_directions
+
+        self.data = make_dummy_graph(n_drugs=200, n_edges=2000, seed=91)
+        # simulate M1's real graph: every pair present in both directions
+        self.directed = both_directions(self.data.edge_index).T  # (2, 2E)
+        self.directed_labels = np.concatenate([self.data.labels, self.data.labels])
+
+    def test_naive_row_split_leaks_as_reported(self):
+        """Confirms the diagnosis: splitting rows directly is ~70% leaky."""
+        splits = stratified_split(self.directed_labels, seed=3)
+        canon = np.sort(self.directed.T, axis=1)
+        train_pairs = {tuple(canon[i]) for i in splits.train}
+        test_pairs = [tuple(canon[i]) for i in splits.test]
+        leaked = sum(1 for p in test_pairs if p in train_pairs)
+        self.assertGreater(leaked / len(test_pairs), 0.5)  # the bug, reproduced
+
+    def test_canonical_pipeline_has_zero_leak(self):
+        from eval.split import assert_no_undirected_leakage, dedupe_undirected
+
+        edges, labels, _ = dedupe_undirected(self.directed, self.directed_labels)
+        self.assertEqual(edges.shape[0], self.data.n_edges)  # halved, as expected
+        splits = make_splits(edges, labels, seed=3)
+
+        canon = np.sort(edges, axis=1)
+        train_pairs = {tuple(canon[i]) for i in splits.train}
+        test_pairs = [tuple(canon[i]) for i in splits.test]
+        leaked = sum(1 for p in test_pairs if p in train_pairs)
+        self.assertEqual(leaked, 0)
+        assert_no_undirected_leakage(splits, edges)
+
+    def test_map_split_to_directed_keeps_both_orientations_together(self):
+        from eval.split import dedupe_undirected, map_split_to_directed
+
+        edges, labels, _ = dedupe_undirected(self.directed, self.directed_labels)
+        splits = make_splits(edges, labels, seed=3)
+        directed = map_split_to_directed(splits, self.directed)
+
+        # every original row is assigned exactly once
+        assigned = np.concatenate(
+            [v for k, v in directed.items() if not k.startswith("_")]
+        )
+        self.assertEqual(assigned.size, self.directed.shape[1])
+        self.assertEqual(np.unique(assigned).size, assigned.size)
+
+        # and a pair's two directions share a partition
+        canon = np.sort(self.directed.T, axis=1)
+        for name, rows in directed.items():
+            if name.startswith("_") or rows.size == 0:
+                continue
+            pairs = {tuple(canon[r]) for r in rows}
+            others = np.concatenate(
+                [v for k, v in directed.items() if k != name and not k.startswith("_")]
+            )
+            other_pairs = {tuple(canon[r]) for r in others}
+            self.assertEqual(pairs & other_pairs, set(), f"{name} shares pairs")
+
+        # train should have ~2x the rows of the canonical train split
+        self.assertEqual(directed["train"].size, splits.train.size * 2)
+
+    def test_assert_no_undirected_leakage_catches_injected_mirror(self):
+        from eval.split import assert_no_undirected_leakage, dedupe_undirected
+
+        edges, labels, _ = dedupe_undirected(self.directed, self.directed_labels)
+        splits = make_splits(edges, labels, seed=3)
+        splits.indices["test"] = np.concatenate([splits.test, splits.train[:1]])
+        with self.assertRaises(AssertionError):
+            assert_no_undirected_leakage(splits, edges)
+
+
+class TestDetectionMetrics(unittest.TestCase):
+    def test_detection_separates_from_severity(self):
+        from eval.metrics import evaluate_detection
+
+        y_true = np.array([1, 1, 0, 0, 1, 0])
+        y_score = np.array([0.9, 0.8, 0.2, 0.1, 0.4, 0.3])
+        res = evaluate_detection(y_true, y_score, model_name="detection_baseline")
+        self.assertEqual(res.n_samples, 6)
+        self.assertEqual(res.n_positive, 3)
+        self.assertIsNotNone(res.roc_auc)
+        self.assertAlmostEqual(res.recall, 2 / 3)  # 0.4 falls below threshold
+        self.assertAlmostEqual(res.precision, 1.0)
+
+    def test_detection_rejects_severity_labels(self):
+        from eval.metrics import evaluate_detection
+
+        with self.assertRaises(ValueError):
+            evaluate_detection([0, 1, 2], [0.1, 0.5, 0.9])
+
+    def test_detection_accepts_hard_predictions(self):
+        from eval.metrics import evaluate_detection
+
+        res = evaluate_detection([1, 0, 1], [1, 0, 0])
+        self.assertIsNone(res.roc_auc)
+        self.assertAlmostEqual(res.accuracy, 2 / 3)
+
+    def test_detection_markdown_warns_against_cross_reading(self):
+        from eval.metrics import detection_to_markdown, evaluate_detection
+
+        res = evaluate_detection([1, 0, 1, 0], [0.9, 0.2, 0.7, 0.1], model_name="m3_binary")
+        md = detection_to_markdown([res])
+        self.assertIn("m3_binary", md)
+        self.assertIn("not comparable", md)
+
+    def test_detection_result_roundtrip(self):
+        from eval.metrics import DetectionResult, evaluate_detection
+
+        res = evaluate_detection([1, 0, 1, 0], [0.9, 0.2, 0.7, 0.1], model_name="rt")
+        with tempfile.TemporaryDirectory() as d:
+            p = res.save(Path(d) / "det.json")
+            back = DetectionResult.load(p)
+        self.assertEqual(back.model_name, "rt")
+
+
+class TestDay3Pipeline(unittest.TestCase):
+    """make_splits.py -> run_eval.py, the Day-3 path, on synthetic M1 output."""
+
+    def _write_edges_csv(self, path: Path, data) -> None:
+        import csv as _csv
+
+        names = {0: "minor", 1: "moderate", 2: "major"}
+        with path.open("w", newline="", encoding="utf-8") as fh:
+            w = _csv.writer(fh)
+            w.writerow(["drug_a", "drug_b", "severity", "description"])
+            for i in range(data.n_edges):
+                a, b = int(data.edge_index[0, i]), int(data.edge_index[1, i])
+                w.writerow([f"DB{a:05d}", f"DB{b:05d}", names[int(data.labels[i])], "x"])
+            # a reversed duplicate and a self-loop, to prove they get handled
+            a, b = int(data.edge_index[0, 0]), int(data.edge_index[1, 0])
+            w.writerow([f"DB{b:05d}", f"DB{a:05d}", "major", "reversed dup"])
+            w.writerow([f"DB{a:05d}", f"DB{a:05d}", "minor", "self loop"])
+
+    def test_make_splits_then_run_eval(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+        import make_splits
+        import run_eval
+
+        data = make_dummy_graph(n_drugs=120, n_edges=900, seed=77)
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            edges_csv = root / "edges_labeled.csv"
+            split_json = root / "ddi_v1.json"
+            self._write_edges_csv(edges_csv, data)
+
+            rc = make_splits.main(
+                ["--edges", str(edges_csv), "--out", str(split_json), "--seed", "42"]
+            )
+            self.assertEqual(rc, 0)
+            self.assertTrue(split_json.exists())
+            self.assertTrue(split_json.with_suffix(".summary.md").exists())
+
+            splits = load_splits(split_json)
+            n_unique = sum(splits.sizes().values())
+            self.assertEqual(n_unique, data.n_edges)  # dup + self-loop dropped
+            self.assertGreater(splits["severe_benchmark"].size, 0)
+
+            # fake model outputs covering every split
+            results_dir = root / "results"
+            results_dir.mkdir()
+            all_idx = np.concatenate([splits[k] for k in splits.names])
+            # labels in deduped order, exactly as the split indices address them
+            from eval.split import dedupe_undirected
+
+            raw_edges, raw_labels, _ = make_splits.read_edges(edges_csv)
+            _, labels_all, _ = dedupe_undirected(raw_edges, raw_labels, keep="max")
+            self.assertEqual(labels_all.size, n_unique)
+
+            for name, acc in (("baseline_gnn", 0.55), ("mechanism_gnn", 0.85)):
+                y_pred, proba = make_dummy_predictions(
+                    labels_all[all_idx], accuracy=acc, seed=9
+                )
+                np.savez(
+                    results_dir / f"preds_{name}.npz",
+                    edge_idx=all_idx,
+                    y_true=labels_all[all_idx],
+                    y_pred=y_pred,
+                    y_proba=proba,
+                )
+
+            rng = np.random.default_rng(0)
+            np.savez(
+                results_dir / "preds_detection_baseline.npz",
+                edge_idx=all_idx,
+                y_true_bin=(labels_all[all_idx] > 0).astype(int),
+                y_score=rng.random(all_idx.size),
+                task="detection",
+            )
+
+            out_md = root / "results_comparison.md"
+            rc = run_eval.main(
+                [
+                    "--results-dir", str(results_dir),
+                    "--splits", str(split_json),
+                    "--out", str(out_md),
+                ]
+            )
+            self.assertEqual(rc, 0)
+            self.assertTrue(out_md.exists())
+
+            text = out_md.read_text()
+            self.assertIn("Severity prediction (ordinal, 3-class)", text)
+            self.assertIn("mechanism_gnn", text)
+            self.assertIn("Held-out severe subset", text)
+            self.assertIn("Binary interaction detection", text)
+            self.assertIn("not comparable", text)  # the cross-reading warning
+            self.assertTrue(list(results_dir.glob("*_test.json")))
+
+    def test_make_splits_says_what_is_missing(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+        import make_splits
+
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(SystemExit) as ctx:
+                make_splits.main(["--edges", str(Path(d) / "nope.csv")])
+            self.assertIn("M1 dependency", str(ctx.exception))
+
+    def test_run_eval_without_splits_points_at_make_splits(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+        import run_eval
+
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(SystemExit) as ctx:
+                run_eval.main(["--splits", str(Path(d) / "missing.json")])
+            self.assertIn("make_splits.py", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

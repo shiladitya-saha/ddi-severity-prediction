@@ -174,6 +174,152 @@ def normalize_edge_index(edge_index: ArrayLike) -> np.ndarray:
     return arr.astype(int)
 
 
+def canonicalize_edges(edge_index: ArrayLike) -> np.ndarray:
+    """
+    Canonical undirected form: every pair becomes (min_id, max_id).
+
+    DDI is symmetric - "warfarin + aspirin" and "aspirin + warfarin" are one
+    interaction. If both orientations survive into the edge list, one can land
+    in train and the other in test, and the model scores a pair it has already
+    memorised. That is the single most common silent leak in link-prediction
+    papers, so M1/M3/M4 should canonicalize before anything else.
+
+    Returns (E, 2) int array.
+    """
+    ei = normalize_edge_index(edge_index)
+    return np.sort(ei, axis=1)
+
+
+def dedupe_undirected(
+    edge_index: ArrayLike,
+    labels: Optional[ArrayLike] = None,
+    keep: str = "max",
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Collapse duplicate undirected pairs, including self-loops.
+
+    `keep` decides the label when the same pair appears with conflicting
+    severities: "max" takes the worst severity (the clinically safe choice, and
+    what we use), "first" keeps the first occurrence.
+
+    Returns (edge_index (E', 2), labels (E',) or empty, kept_indices (E',)) so
+    callers can subset any parallel array - features, descriptions - the same way.
+    """
+    if keep not in {"max", "first"}:
+        raise ValueError("keep must be 'max' or 'first'")
+    canon = canonicalize_edges(edge_index)
+    y = None if labels is None else _check_labels(labels, canon.shape[0])
+
+    self_loops = canon[:, 0] == canon[:, 1]
+    order = np.arange(canon.shape[0])[~self_loops]
+    canon_ok = canon[~self_loops]
+
+    seen: Dict[Tuple[int, int], int] = {}
+    for pos, idx in enumerate(order):
+        key = (int(canon_ok[pos, 0]), int(canon_ok[pos, 1]))
+        if key not in seen:
+            seen[key] = int(idx)
+        elif y is not None and keep == "max" and y[idx] > y[seen[key]]:
+            seen[key] = int(idx)
+
+    kept = np.array(sorted(seen.values()), dtype=int)
+    out_edges = canonicalize_edges(normalize_edge_index(edge_index)[kept])
+    out_labels = np.array([], dtype=int) if y is None else y[kept]
+    return out_edges, out_labels, kept
+
+
+def both_directions(edge_index: ArrayLike) -> np.ndarray:
+    """
+    Expand canonical pairs back to both orientations, for message passing.
+
+    Splitting happens on canonical pairs; training runs on a directed graph.
+    Returns (2E, 2) with (a,b) followed by (b,a) for every input pair.
+    """
+    ei = normalize_edge_index(edge_index)
+    return np.concatenate([ei, ei[:, ::-1]], axis=0)
+
+
+def map_split_to_directed(
+    splits: "SplitSet",
+    original_edge_index: ArrayLike,
+) -> Dict[str, np.ndarray]:
+    """
+    Translate a canonical-pair split into row indices of M1's ORIGINAL
+    (possibly bidirectional) edge array.
+
+    This is the piece that makes the leak-free split usable for training: the
+    split is decided once on canonical pairs, then every row of the original
+    array - both (a,b) and (b,a) - is assigned to whichever partition its pair
+    belongs to. A pair's two directions therefore always land in the SAME
+    partition, which is precisely what stops the mirror leak.
+
+    Returns {split_name: row indices into original_edge_index}.
+
+    Usage (M3/M4):
+        directed = map_split_to_directed(splits, original_edge_index)
+        train_edges = original_edge_index[:, directed["train"]]   # (2, N) PyG layout
+    """
+    ei = normalize_edge_index(original_edge_index)
+    canon = np.sort(ei, axis=1)
+
+    # canonical pair -> split name, from the split's own (deduped) edge list
+    pair_owner: Dict[Tuple[int, int], str] = {}
+    source = splits.meta.get("canonical_pairs")
+    if source is None:
+        raise ValueError(
+            "this SplitSet carries no canonical_pairs in meta - rebuild it with "
+            "make_splits() from this version, or pass the deduped edge array "
+            "through SplitSet.meta['canonical_pairs']"
+        )
+    pairs = np.asarray(source, dtype=int)
+    for name, idx in splits.indices.items():
+        for i in np.asarray(idx, dtype=int):
+            pair_owner[(int(pairs[i, 0]), int(pairs[i, 1]))] = name
+
+    out: Dict[str, List[int]] = {name: [] for name in splits.names}
+    unassigned = 0
+    for row in range(canon.shape[0]):
+        key = (int(canon[row, 0]), int(canon[row, 1]))
+        owner = pair_owner.get(key)
+        if owner is None:
+            unassigned += 1
+            continue
+        out[owner].append(row)
+
+    result = {name: np.array(sorted(v), dtype=int) for name, v in out.items()}
+    if unassigned:
+        result["_unassigned_count"] = np.array([unassigned], dtype=int)
+    return result
+
+
+def assert_no_undirected_leakage(
+    splits: "SplitSet",
+    edge_index: ArrayLike,
+    names: Sequence[str] = ("train", "val", "test", "severe_benchmark"),
+) -> None:
+    """
+    Hard check: no canonical pair appears in two partitions. Raises on failure.
+
+    Run this after any manual split surgery. `verify_splits(..., edge_index=...)`
+    performs the same check as part of its wider sweep.
+    """
+    ei = normalize_edge_index(edge_index)
+    canon = np.sort(ei, axis=1)
+    seen: Dict[Tuple[int, int], str] = {}
+    for name in names:
+        if name not in splits:
+            continue
+        for i in np.asarray(splits[name], dtype=int):
+            key = (int(canon[i, 0]), int(canon[i, 1]))
+            prev = seen.get(key)
+            if prev is not None and prev != name:
+                raise AssertionError(
+                    f"undirected leakage: pair {key} appears in both '{prev}' and "
+                    f"'{name}'. Canonicalize and dedupe before splitting."
+                )
+            seen[key] = name
+
+
 def _check_labels(labels: ArrayLike, n_edges: int) -> np.ndarray:
     y = np.asarray(labels).astype(int)
     if y.ndim != 1:
@@ -302,6 +448,9 @@ def make_splits(
             "n_edges": int(y.size),
             "n_major_total": int(major_idx.size),
             "n_major_reserved": int(reserved.size),
+            # canonical (min,max) form of every pair, so a split can later be
+            # mapped back onto a bidirectional edge array without leaking
+            "canonical_pairs": np.sort(ei, axis=1).tolist(),
         },
     )
     return splits
