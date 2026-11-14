@@ -1,0 +1,185 @@
+{
+  "n_edges": 307982,
+  "mean": 0.005971128194010005,
+  "std": 0.021628340557484006,
+  "min": 0.0004124377779817223,
+  "max": 1.0,
+  "p90": 0.01050215528157424,
+  "p99": 0.047484914686065166,
+  "gini": 0.5732165759311028,
+  "mechanism_attribution": {
+    "CYP450_inhibition": 0.6103078454113303,
+    "protein_binding_competition": 0.0011673270123306672,
+    "CNS_depression": 0.1731898564023694,
+    "QT_prolongation": 0.21533497117396963
+  },
+  "mechanism_attribution_by_class": {
+    "MINOR": {
+      "CYP450_inhibition": 0.9980906659351152,
+      "protein_binding_competition": 0.0019093340648848412,
+      "CNS_depression": 0.0,
+      "QT_prolongation": 0.0
+    },
+    "MODERATE": {
+      "CYP450_inhibition": 0.0004538500897341057,
+      "protein_binding_competition": 0.0,
+      "CNS_depression": 0.9290756993135045,
+      "QT_prolongation": 0.07047045059676137
+    },
+    "MAJOR": {
+      "CYP450_inhibition": 7.86801956953485e-05,
+      "protein_binding_competition": 0.0,
+      "CNS_depression": 0.05177160105291518,
+      "QT_prolongation": 0.9481497187513895
+    }
+  },
+  "model_name": "model3_tagson",
+  "figures": [
+    "results\\explainability_figures\\model3_tagson_top_edges.png",
+    "results\\explainability_figures\\model3_tagson_mechanism_attribution.png",
+    "results\\explainability_figures\\model3_tagson_mechanism_by_class.png",
+    "results\\explainability_figures\\model3_tagson_ego_drug876.png"
+  ],
+  "top_edges": [
+    {
+      "rank": 1,
+      "edge_idx": 52136,
+      "drug_a": "Verteporfin",
+      "drug_b": "Trioxsalen",
+      "attention": 1.0,
+      "severity": "MODERATE",
+      "mechanisms": [
+        {
+          "mechanism_tag": "unknown",
+          "confidence": 0.0
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "edge_idx": 52138,
+      "drug_a": "Verteporfin",
+      "drug_b": "Titanium dioxide",
+      "attention": 1.0,
+      "severity": "MODERATE",
+      "mechanisms": [
+        {
+          "mechanism_tag": "unknown",
+          "confidence": 0.0
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "edge_idx": 155083,
+      "drug_a": "Lactulose",
+      "drug_b": "L-Glutamine",
+      "attention": 1.0,
+      "severity": "MODERATE",
+      "mechanisms": [
+        {
+          "mechanism_tag": "unknown",
+          "confidence": 0.0
+        }
+      ]
+    },
+    {
+      "rank": 4,
+      "edge_idx": 152661,
+      "drug_a": "Lorpiprazole",
+      "drug_b": "Thiocolchicoside",
+      "attention": 1.0,
+      "severity": "MODERATE",
+      "mechanisms": [
+        {
+          "mechanism_tag": "unknown",
+          "confidence": 0.0
+        }
+      ]
+    },
+    {
+      "rank": 5,
+      "edge_idx": 288793,
+      "drug_a": "Dexketoprofen",
+      "drug_b": "Sulfacytine",
+      "attention": 1.0,
+      "severity": "MODERATE",
+      "mechanisms": [
+        {
+          "mechanism_tag": "unknown",
+          "confidence": 0.0
+        }
+      ]
+    },
+    {
+      "rank": 6,
+      "edge_idx": 294037,
+      "drug_a": "Dolutegravir",
+      "drug_b": "Zinc",
+      "attention": 1.0,
+      "severity": "MINOR",
+      "mechanisms": [
+        {
+          "mechanism_tag": "unknown",
+          "confidence": 0.0
+        }
+      ]
+    },
+    {
+      "rank": 7,
+      "edge_idx": 260385,
+      "drug_a": "Picosulfuric acid",
+      "drug_b": "Spectinomycin",
+      "attention": 1.0,
+      "severity": "MODERATE",
+      "mechanisms": [
+        {
+          "mechanism_tag": "unknown",
+          "confidence": 0.0
+        }
+      ]
+    },
+    {
+      "rank": 8,
+      "edge_idx": 50776,
+      "drug_a": "Levothyroxine",
+      "drug_b": "Polaprezinc",
+      "attention": 1.0,
+      "severity": "MINOR",
+      "mechanisms": [
+        {
+          "mechanism_tag": "unknown",
+          "confidence": 0.0
+        }
+      ]
+    },
+    {
+      "rank": 9,
+      "edge_idx": 302870,
+      "drug_a": "Tipiracil",
+      "drug_b": "Nonoxynol-9",
+      "attention": 1.0,
+      "severity": "MODERATE",
+      "mechanisms": [
+        {
+          "mechanism_tag": "unknown",
+          "confidence": 0.0
+        }
+      ]
+    },
+    {
+      "rank": 10,
+      "edge_idx": 161376,
+      "drug_a": "Probenecid",
+      "drug_b": "Oseltamivir",
+      "attention": 1.0,
+      "severity": "MINOR",
+      "mechanisms": [
+        {
+          "mechanism_tag": "CYP450_inhibition",
+          "confidence": 0.550000011920929
+        }
+      ]
+    }
+  ]
+}
