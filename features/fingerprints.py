@@ -19,6 +19,7 @@ that's resolved, main() will report the block clearly rather than guessing.
 """
 
 import time
+from pathlib import Path
 
 import torch
 from rdkit import Chem
@@ -30,6 +31,7 @@ FINGERPRINT_RADIUS = 2
 FINGERPRINT_NBITS = 1024
 
 FAILURE_LOG_PATH = "features/fingerprint_failures.log"
+PLACEHOLDER_LOG_PATH = "features/fingerprint_placeholders.log"
 FULL_OUTPUT_PATH = "features/full_features.pt"
 
 # Day-1 reference set: real drugs with accurate SMILES strings. Kept for
@@ -81,9 +83,15 @@ def smiles_to_fingerprint(smiles, radius=FINGERPRINT_RADIUS, n_bits=FINGERPRINT_
 def build_fingerprints(drug_to_smiles):
     """Build the {drug_id: fingerprint_vector} dict from a drug_id -> SMILES mapping.
 
-    Matches the full_features.pt contract in features/README.md. Never raises
-    on a per-drug failure: missing or invalid SMILES are collected into
-    `failures` as (drug_id, reason) pairs instead of crashing the whole run.
+    Matches the full_features.pt contract in features/README.md: every
+    drug_id passed in gets an entry, full stop. A drug with no usable SMILES
+    (missing, unparseable, or fingerprint generation otherwise fails) gets a
+    torch.zeros(FINGERPRINT_NBITS) placeholder instead of being silently
+    omitted -- omitting one breaks any loader that assumes full graph
+    coverage (e.g. models/train.py's align_node_features). Never raises on a
+    per-drug failure: missing or invalid SMILES are collected into
+    `failures` as (drug_id, reason) pairs so callers can log which rows carry
+    no real signal, rather than hiding it inside a silent zero vector.
 
     Returns (fingerprints, failures).
     """
@@ -92,11 +100,13 @@ def build_fingerprints(drug_to_smiles):
     for drug_id, smiles in drug_to_smiles.items():
         if not smiles:
             failures.append((drug_id, "missing SMILES"))
+            fingerprints[drug_id] = torch.zeros(FINGERPRINT_NBITS)
             continue
         try:
             fingerprints[drug_id] = smiles_to_fingerprint(smiles)
         except ValueError as e:
             failures.append((drug_id, str(e)))
+            fingerprints[drug_id] = torch.zeros(FINGERPRINT_NBITS)
     return fingerprints, failures
 
 
@@ -251,6 +261,32 @@ def extract_all_fingerprints(graph=None):
     return fingerprints, failures, drug_ids
 
 
+def write_failure_logs(failures):
+    """Write fingerprint_failures.log / fingerprint_placeholders.log for `failures`.
+
+    Shared by this module's own main() and build_features.py's main() -- both
+    entrypoints that can produce full_features.pt must log the same way, so a
+    drug's zero-vector placeholder is never hidden just because it went
+    through one entrypoint instead of the other.
+    """
+    if failures:
+        with open(FAILURE_LOG_PATH, "w") as f:
+            for drug_id, reason in failures:
+                f.write(f"{drug_id}\t{reason}\n")
+        with open(PLACEHOLDER_LOG_PATH, "w") as f:
+            f.write(
+                "# These drug_ids have a torch.zeros(FINGERPRINT_NBITS) placeholder in "
+                f"{FULL_OUTPUT_PATH}, not a real fingerprint -- they carry no signal from "
+                "this feature. See fingerprint_failures.log for why each one failed.\n"
+            )
+            for drug_id, reason in failures:
+                f.write(f"{drug_id}\t{reason}\n")
+    else:
+        for path in (FAILURE_LOG_PATH, PLACEHOLDER_LOG_PATH):
+            if Path(path).exists():
+                Path(path).unlink()
+
+
 def main():
     start = time.time()
 
@@ -265,21 +301,20 @@ def main():
         print(f"BLOCKED: {e}. Not proceeding with full-graph fingerprint extraction.")
         return
 
-    if failures:
-        with open(FAILURE_LOG_PATH, "w") as f:
-            for drug_id, reason in failures:
-                f.write(f"{drug_id}\t{reason}\n")
+    write_failure_logs(failures)
 
     torch.save(fingerprints, FULL_OUTPUT_PATH)
 
     runtime = time.time() - start
     print(f"Total drugs processed: {len(drug_ids)}")
-    print(f"Succeeded: {len(fingerprints)}")
-    print(f"Failed: {len(failures)}")
+    print(f"Real fingerprints: {len(fingerprints) - len(failures)}")
+    print(f"Zero-vector placeholders (no usable SMILES): {len(failures)}")
+    print(f"Total entries in output (always == total drugs): {len(fingerprints)}")
     print(f"Runtime: {runtime:.2f}s")
     print(f"Saved output to {FULL_OUTPUT_PATH}")
     if failures:
-        print(f"Failure details logged to {FAILURE_LOG_PATH}")
+        print(f"Failure reasons logged to {FAILURE_LOG_PATH}")
+        print(f"Placeholder drug_ids logged to {PLACEHOLDER_LOG_PATH}")
 
 
 if __name__ == "__main__":

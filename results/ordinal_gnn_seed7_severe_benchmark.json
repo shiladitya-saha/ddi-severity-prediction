@@ -1,0 +1,63 @@
+{
+  "model_name": "ordinal_gnn_seed7",
+  "split": "severe_benchmark",
+  "n_samples": 2282,
+  "macro_f1": 0.3053906435526003,
+  "mae": 0.1831726555652936,
+  "major_recall": 0.8453111305872042,
+  "qwk": 0.0,
+  "micro_f1": 0.8453111305872042,
+  "weighted_f1": 0.9161719306578011,
+  "accuracy": 0.8453111305872042,
+  "balanced_accuracy": 0.8453111305872042,
+  "within_one_accuracy": 0.9715162138475022,
+  "rmse": 0.49004104712798213,
+  "per_class": {
+    "MINOR": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 0
+    },
+    "MODERATE": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 0
+    },
+    "MAJOR": {
+      "precision": 1.0,
+      "recall": 0.8453111305872042,
+      "f1": 0.916171930657801,
+      "support": 2282
+    }
+  },
+  "confusion": [
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      65,
+      288,
+      1929
+    ]
+  ],
+  "support": {
+    "MINOR": 0,
+    "MODERATE": 0,
+    "MAJOR": 2282
+  },
+  "macro_auc": null,
+  "major_auc": null,
+  "major_ap": null,
+  "notes": {
+    "auc_skipped": "only one class present in y_true"
+  }
+}
