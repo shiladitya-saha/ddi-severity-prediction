@@ -58,3 +58,10 @@ def load_labeled_graph(proc_dir=PROC_DIR):
 def load_class_weights(proc_dir=PROC_DIR):
     import json
     return json.loads(_need(Path(proc_dir) / "class_weights.json").read_text())
+
+
+def load_twosides_validation(proc_dir=PROC_DIR):
+    """Cross-dataset validation pairs (src,dst = graph node idx; twosides_severity 0/1/2;
+    drugbank_severity is NaN where the pair is not in the DrugBank graph)."""
+    return pd.read_csv(_need(Path(proc_dir) / "twosides_validation.csv"),
+                       dtype={"drugbank_id_1": str, "drugbank_id_2": str})

@@ -7,6 +7,9 @@ Severity label contract (shared with M1/M2/M3/M4):
 
 from .metrics import (  # noqa: F401
     MAJOR,
+    DetectionResult,
+    detection_to_markdown,
+    evaluate_detection,
     MINOR,
     MODERATE,
     ORDERED_CLASSES,
@@ -30,6 +33,11 @@ from .benchmark_severe_subset import (  # noqa: F401
 )
 from .split import (  # noqa: F401
     SplitSet,
+    assert_no_undirected_leakage,
+    both_directions,
+    canonicalize_edges,
+    dedupe_undirected,
+    map_split_to_directed,
     drug_disjoint_split,
     load_splits,
     make_splits,
@@ -60,6 +68,14 @@ __all__ = [
     "verify_splits",
     "save_splits",
     "load_splits",
+    "canonicalize_edges",
+    "dedupe_undirected",
+    "both_directions",
+    "map_split_to_directed",
+    "assert_no_undirected_leakage",
+    "DetectionResult",
+    "evaluate_detection",
+    "detection_to_markdown",
     "benchmark_severe",
     "severity_miss_profile",
     "severe_subset_markdown",
@@ -67,4 +83,4 @@ __all__ = [
     "evaluate_link_prediction",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.4.0"

@@ -123,17 +123,18 @@ def main(argv=None):
     except NotImplementedError as e:
         print(f"BLOCKED (fingerprints): {e}. Not proceeding with feature pipeline.")
         return
+    fingerprints.write_failure_logs(fp_failures)
 
     mech_rows, total_edges, mech_confident, mech_unknown = mechanism_extraction.extract_all_mechanism_edges(graph)
 
     embedded_count = placeholder_count = 0
     try:
-        smiles_lookup = fingerprints.load_smiles_lookup()
+        smiles_lookup = fingerprints.load_smiles_lookup(drug_ids=drug_ids)
         drug_to_smiles = {drug_id: smiles_lookup.get(drug_id) for drug_id in drug_ids}
         feature_dict, embedded_count, placeholder_count = merge_embeddings(
             feature_dict, drug_to_smiles, use_embeddings=args.use_embeddings
         )
-    except NotImplementedError:
+    except (NotImplementedError, FileNotFoundError):
         print("[build_features] Skipping embedding merge: no drug_id -> SMILES source "
               "wired up yet (same gap noted in features/fingerprints.py).")
 
@@ -151,8 +152,8 @@ def main(argv=None):
 
     print("=== build_features.py summary ===")
     print(f"Total drugs in graph: {len(drug_ids)}")
-    print(f"Fingerprints succeeded: {len(feature_dict)}")
-    print(f"Fingerprints failed: {len(fp_failures)}")
+    print(f"Real fingerprints: {len(feature_dict) - len(fp_failures)}")
+    print(f"Zero-vector placeholders (no usable SMILES): {len(fp_failures)}")
     print(f"Total edges: {total_edges}")
     print(f"Mechanism edges with confident tag: {mech_confident}")
     print(f"Mechanism edges fell back to unknown: {mech_unknown}")

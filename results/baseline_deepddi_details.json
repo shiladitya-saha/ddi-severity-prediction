@@ -1,0 +1,210 @@
+{
+  "model": "DeepDDI-style re-implementation (Ryu, Kim & Lee 2018), trained on our own split",
+  "tag": "baseline_deepddi",
+  "config": {
+    "graph": "data/processed/graph.pt",
+    "features": "features/full_features.pt",
+    "splits": "eval/splits/ddi_v1.json",
+    "tag": "baseline_deepddi",
+    "epochs": 60,
+    "batch_size": 4096,
+    "lr": 0.001,
+    "patience": 6,
+    "seed": 42,
+    "device": "cpu",
+    "results_dir": "results"
+  },
+  "feature_representation": "concatenated Tanimoto structural-similarity profiles (SSP), ECFP4-based",
+  "best_epoch": 9,
+  "results": {
+    "val": {
+      "model_name": "baseline_deepddi",
+      "split": "val",
+      "n_samples": 32996,
+      "macro_f1": 0.7939847874822124,
+      "mae": 0.17920353982300885,
+      "major_recall": 0.8303249097472925,
+      "qwk": 0.7060437988569797,
+      "micro_f1": 0.8421929930900716,
+      "weighted_f1": 0.845357157621235,
+      "accuracy": 0.8421929930900716,
+      "balanced_accuracy": 0.8485753337197627,
+      "within_one_accuracy": 0.9786034670869196,
+      "rmse": 0.47116515750760857,
+      "per_class": {
+        "MINOR": {
+          "precision": 0.770686175580222,
+          "recall": 0.9456740442655935,
+          "f1": 0.8492598512752797,
+          "support": 12922
+        },
+        "MODERATE": {
+          "precision": 0.9772472696723606,
+          "recall": 0.7697270471464019,
+          "f1": 0.8611616644560288,
+          "support": 18135
+        },
+        "MAJOR": {
+          "precision": 0.5637254901960784,
+          "recall": 0.8303249097472925,
+          "f1": 0.6715328467153284,
+          "support": 1939
+        }
+      },
+      "confusion": [
+        [
+          12220,
+          303,
+          399
+        ],
+        [
+          3329,
+          13959,
+          847
+        ],
+        [
+          307,
+          22,
+          1610
+        ]
+      ],
+      "support": {
+        "MINOR": 12922,
+        "MODERATE": 18135,
+        "MAJOR": 1939
+      },
+      "macro_auc": 0.9710320066596898,
+      "major_auc": 0.9775444501611215,
+      "major_ap": 0.7719491701659684,
+      "notes": {}
+    },
+    "test": {
+      "model_name": "baseline_deepddi",
+      "split": "test",
+      "n_samples": 33002,
+      "macro_f1": 0.7943029154514744,
+      "mae": 0.1795345736622023,
+      "major_recall": 0.8315301391035549,
+      "qwk": 0.7092222880990853,
+      "micro_f1": 0.840433913096176,
+      "weighted_f1": 0.8432881045953071,
+      "accuracy": 0.840433913096176,
+      "balanced_accuracy": 0.8480674021765683,
+      "within_one_accuracy": 0.9800315132416217,
+      "rmse": 0.4684779046859722,
+      "per_class": {
+        "MINOR": {
+          "precision": 0.7674812030075188,
+          "recall": 0.9477715877437326,
+          "f1": 0.8481512255920233,
+          "support": 12924
+        },
+        "MODERATE": {
+          "precision": 0.9758722566122678,
+          "recall": 0.7649004796824171,
+          "f1": 0.8576020770871325,
+          "support": 18137
+        },
+        "MAJOR": {
+          "precision": 0.5711252653927813,
+          "recall": 0.8315301391035549,
+          "f1": 0.6771554436752675,
+          "support": 1941
+        }
+      },
+      "confusion": [
+        [
+          12249,
+          306,
+          369
+        ],
+        [
+          3421,
+          13873,
+          843
+        ],
+        [
+          290,
+          37,
+          1614
+        ]
+      ],
+      "support": {
+        "MINOR": 12924,
+        "MODERATE": 18137,
+        "MAJOR": 1941
+      },
+      "macro_auc": 0.9704311908701989,
+      "major_auc": 0.976553656587167,
+      "major_ap": 0.7667097818328864,
+      "notes": {}
+    },
+    "severe_benchmark": {
+      "model_name": "baseline_deepddi",
+      "split": "severe_benchmark",
+      "n_samples": 2282,
+      "macro_f1": 0.30034513203306845,
+      "mae": 0.3418054338299737,
+      "major_recall": 0.8198948290972831,
+      "qwk": 0.0,
+      "micro_f1": 0.8198948290972831,
+      "weighted_f1": 0.9010353960992054,
+      "accuracy": 0.8198948290972831,
+      "balanced_accuracy": 0.8198948290972831,
+      "within_one_accuracy": 0.8382997370727432,
+      "rmse": 0.8156015937236067,
+      "per_class": {
+        "MINOR": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 0
+        },
+        "MODERATE": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "support": 0
+        },
+        "MAJOR": {
+          "precision": 1.0,
+          "recall": 0.8198948290972831,
+          "f1": 0.9010353960992054,
+          "support": 2282
+        }
+      },
+      "confusion": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          369,
+          42,
+          1871
+        ]
+      ],
+      "support": {
+        "MINOR": 0,
+        "MODERATE": 0,
+        "MAJOR": 2282
+      },
+      "macro_auc": null,
+      "major_auc": null,
+      "major_ap": null,
+      "notes": {
+        "partition": "held-out severe subset (MAJOR only)",
+        "never_trained_on": "true",
+        "headline_metric": "major_recall",
+        "auc_skipped": "only one class present in y_true"
+      }
+    }
+  },
+  "citation_note": "Architecture and feature idea follow the published method; numbers are NOT the paper's reported numbers -- they are measured fresh on our dataset/split so the comparison to Models 1-3 is fair."
+}
