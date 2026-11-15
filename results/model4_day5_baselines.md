@@ -74,13 +74,18 @@ their place in the architecture through interpretability, not accuracy.
 - RF, GBM (3 seeds: 42, 7, 123), MLP, DeepDDI: done. GBM's number is
   extremely stable across seeds (F1 std 0.0005, severe-recall std 0.003) —
   the severe-recall gap to Model 3 is not a one-seed artifact.
-- All numbers above are also independently reproduced by the official,
-  auto-regenerated `eval/results_comparison.md` (run `python
-  scripts/run_eval.py`), which scores RF, GBM, MLP, DeepDDI, Model 2 (3
-  seeds), and Model 3 seed 42 (both tag variants) directly from saved
+- RF, GBM, MLP, DeepDDI, and Model 2's numbers above are independently
+  reproduced by the official, auto-regenerated `eval/results_comparison.md`
+  (run `python scripts/run_eval.py`), which scores them directly from saved
   `.npz` predictions on the exact same official split — matches this table
-  to 4 decimal places. This is now the ground-truth regenerable table;
-  treat it as the source if these two ever drift apart.
+  to 4 decimal places. **This does not extend to the two Model 3 rows**:
+  those are 5-seed means that include four independently resampled splits
+  (see the methodology note in `model4_day4_summary.md`), not the official
+  split alone. The official table's `mechanism_gnn`/`mechanism_gnn_noedge`
+  rows are seed-42-only and will not numerically match these means — that's
+  expected, not a discrepancy to chase. Treat `eval/results_comparison.md`
+  as the source of truth for every model except Model 3's multi-seed claim,
+  which only this document makes.
 - Only Model 3's seed-42 checkpoints are in the official table — seeds
   7/123/2024/777 were trained on independently resampled splits, not the
   official one (see the methodology note added to

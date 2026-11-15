@@ -1,0 +1,142 @@
+{
+  "note": "TWOSIDES severity is a heuristic FAERS-signal proxy, not ground truth. Numbers are agreement/enrichment against an independent signal.",
+  "group_sizes": {
+    "novel": 62077,
+    "excluded_train": 18842,
+    "held_out_overlap": 8342
+  },
+  "results": {
+    "Model2_GCN": {
+      "held_out_overlap": {
+        "n": 8342,
+        "agreement": 0.33133541117238074,
+        "major_enrichment": 0.15877683034401646,
+        "pred_severity_counts": {
+          "MINOR": 3411,
+          "MODERATE": 3680,
+          "MAJOR": 1251
+        }
+      },
+      "novel": {
+        "n": 62077,
+        "agreement": 0.3238880744881357,
+        "major_enrichment": 0.1765710220535926,
+        "pred_severity_counts": {
+          "MINOR": 30020,
+          "MODERATE": 21476,
+          "MAJOR": 10581
+        }
+      }
+    },
+    "Model3_tagson": {
+      "held_out_overlap": {
+        "n": 8342,
+        "agreement": 0.32582114600815154,
+        "major_enrichment": 0.11937665392531609,
+        "pred_severity_counts": {
+          "MINOR": 3717,
+          "MODERATE": 3746,
+          "MAJOR": 879
+        }
+      },
+      "novel": {
+        "n": 62077,
+        "agreement": 0.32731929700211027,
+        "major_enrichment": 0.08271282902537348,
+        "pred_severity_counts": {
+          "MINOR": 29482,
+          "MODERATE": 27614,
+          "MAJOR": 4981
+        }
+      }
+    },
+    "Model3_tagsoff": {
+      "held_out_overlap": {
+        "n": 8342,
+        "agreement": 0.31826900023975063,
+        "major_enrichment": 0.12584533960599822,
+        "pred_severity_counts": {
+          "MINOR": 4092,
+          "MODERATE": 3314,
+          "MAJOR": 936
+        }
+      },
+      "novel": {
+        "n": 62077,
+        "agreement": 0.30980878586271887,
+        "major_enrichment": 0.09186625563196585,
+        "pred_severity_counts": {
+          "MINOR": 35050,
+          "MODERATE": 21370,
+          "MAJOR": 5657
+        }
+      }
+    },
+    "RF": {
+      "held_out_overlap": {
+        "n": 8342,
+        "agreement": 0.3334931671062095,
+        "major_enrichment": 0.04498676859747133,
+        "pred_severity_counts": {
+          "MINOR": 3215,
+          "MODERATE": 4830,
+          "MAJOR": 297
+        }
+      },
+      "novel": {
+        "n": 62077,
+        "agreement": 0.35697601366045395,
+        "major_enrichment": 0.015413801280531183,
+        "pred_severity_counts": {
+          "MINOR": 21846,
+          "MODERATE": 39383,
+          "MAJOR": 848
+        }
+      }
+    },
+    "GBM": {
+      "held_out_overlap": {
+        "n": 8342,
+        "agreement": 0.3339726684248382,
+        "major_enrichment": 0.11878859159070862,
+        "pred_severity_counts": {
+          "MINOR": 3459,
+          "MODERATE": 4013,
+          "MAJOR": 870
+        }
+      },
+      "novel": {
+        "n": 62077,
+        "agreement": 0.3410119690062342,
+        "major_enrichment": 0.09338392221958738,
+        "pred_severity_counts": {
+          "MINOR": 24026,
+          "MODERATE": 32559,
+          "MAJOR": 5492
+        }
+      }
+    },
+    "DeepDDI": {
+      "held_out_overlap": {
+        "n": 8342,
+        "agreement": 0.3321745384799808,
+        "major_enrichment": 0.1358423992943252,
+        "pred_severity_counts": {
+          "MINOR": 3661,
+          "MODERATE": 3703,
+          "MAJOR": 978
+        }
+      },
+      "novel": {
+        "n": 62077,
+        "agreement": 0.33637256955071926,
+        "major_enrichment": 0.12653545174294523,
+        "pred_severity_counts": {
+          "MINOR": 25917,
+          "MODERATE": 28782,
+          "MAJOR": 7378
+        }
+      }
+    }
+  }
+}

@@ -41,12 +41,20 @@ seed-42 numbers for Model 3 are used in the auto-generated
 | Config | Seed 42 | Seed 7 | Seed 123 | Seed 2024 | Seed 777 | Mean ± std |
 |---|---|---|---|---|---|---|
 | Model 2 (GCN, ordinal) | 0.7574 | 0.7796 | 0.7803 | — | — | 0.772 ± 0.011 (3 seeds) |
-| Model 3, tags-on | 0.9154 | 0.9009 | 0.8663 | 0.8865 | 0.8866 | **0.8911 ± 0.021** |
-| Model 3, tags-off (ablation) | 0.8822 | 0.8821 | 0.8933 | 0.8789 | 0.8891 | **0.8851 ± 0.005** |
+| Model 3, tags-on | 0.9154 | 0.9009 | 0.8663 | 0.8865 | 0.8866 | **0.8911 ± 0.018** |
+| Model 3, tags-off (ablation) | 0.8822 | 0.8821 | 0.8933 | 0.8789 | 0.8891 | **0.8851 ± 0.006** |
 | Paired diff (on − off) | +0.0332 | +0.0188 | −0.0270 | +0.0076 | −0.0025 | +0.006 ± 0.023 |
 
-All numbers are test-split macro F1, scored with `eval.metrics.evaluate`,
-same M5 canonical split (`eval/splits/ddi_v1.json`, seed 42) for every run.
+All numbers are test-split macro F1, scored with `eval.metrics.evaluate`.
+Model 2's three columns all use the one official split
+(`eval/splits/ddi_v1.json`, seed 42) — only its `--seed` varies, not the
+held-out data. Model 3's five columns do **not**: see the methodology note
+above — only its seed-42 column sits on the official split; seeds
+7/123/2024/777 are each on their own independently resampled split. The
+paired diff row is still a valid per-seed comparison (tags-on and tags-off
+share the same split *for that seed*), but only its seed-42 entry is on the
+official benchmark — the other four each compare on a different resampled
+split from one another.
 
 ## Finding 1 — robust, safe to claim
 
@@ -83,8 +91,8 @@ from noise**:
   evaluated with a leak-aware severe-benchmark protocol." Do not claim
   mechanism tags improve prediction — that is not established.
 - **Deployment recommendation**: Model 3 with tags **off**. Same
-  architecture, nearly identical mean (0.885 vs. 0.891), but 4× lower
-  variance (±0.005 vs ±0.021) — the more reliable choice given the tags
+  architecture, nearly identical mean (0.885 vs. 0.891), but ~3× lower
+  variance (±0.006 vs ±0.018) — the more reliable choice given the tags
   question is unresolved.
 - **Internal vs. established baseline**: Model 2 is an internal ablation
   baseline (our own simpler architecture), not an established/published
