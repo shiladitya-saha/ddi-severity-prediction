@@ -187,8 +187,8 @@ given seed sharing that seed's partition so the comparison is matched.
 
 | Variant | Seed 42 | Seed 7 | Seed 123 | Seed 2024 | Seed 777 | Mean ± std |
 | --- | --- | --- | --- | --- | --- | --- |
-| Tags on | 0.9154 | 0.9009 | 0.8663 | 0.8865 | 0.8866 | 0.891 ± 0.021 |
-| Tags off | 0.8822 | 0.8821 | 0.8933 | 0.8789 | 0.8891 | 0.885 ± 0.005 |
+| Tags on | 0.9154 | 0.9009 | 0.8663 | 0.8865 | 0.8866 | 0.891 ± 0.018 |
+| Tags off | 0.8822 | 0.8821 | 0.8933 | 0.8789 | 0.8891 | 0.885 ± 0.006 |
 | Paired difference | +0.0332 | +0.0188 | −0.0270 | +0.0076 | −0.0025 | +0.006 ± 0.023 |
 
 Test-set macro F1, paired by seed.
@@ -220,8 +220,8 @@ accurate, and we present them on that basis.
 
 For deployment we would nonetheless recommend the untagged configuration where
 interpretability is not required: the means are nearly identical (0.885 versus
-0.891) but its variance across runs is roughly four times lower (±0.005 versus
-±0.021), making it the more predictable choice while the tag question remains
+0.891) but its variance across runs is roughly three times lower (±0.006 versus
+±0.018), making it the more predictable choice while the tag question remains
 open.
 
 ---
